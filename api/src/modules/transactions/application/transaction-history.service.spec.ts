@@ -151,6 +151,41 @@ describe('TransactionHistoryService.query', () => {
     expect(res.downloadUrl).toContain('token=tok');
   });
 
+  it('uses the per-row metadata.direction for an internal_transfer (recipient row → in, sender row → out)', async () => {
+    const recipientRow = {
+      id: 'itr',
+      userId: 'u1',
+      type: 'internal_transfer',
+      status: 'completed',
+      metadata: {
+        asset: 'USDT',
+        cryptoAmount: '3',
+        direction: 'in',
+        role: 'recipient',
+        senderHandle: '@sam.pay',
+      },
+      createdAt: new Date('2026-06-13T10:00:00.000Z'),
+    };
+    const senderRow = {
+      id: 'its',
+      userId: 'u1',
+      type: 'internal_transfer',
+      status: 'completed',
+      metadata: {
+        asset: 'USDT',
+        cryptoAmount: '3',
+        direction: 'out',
+        role: 'sender',
+        recipientHandle: '@ada',
+      },
+      createdAt: new Date('2026-06-13T09:00:00.000Z'),
+    };
+    const { svc } = makeService([recipientRow, senderRow], 2);
+    const res = await svc.query('u1', { period: 'this_month' });
+    expect(res.items[0].direction).toBe('in');
+    expect(res.items[1].direction).toBe('out');
+  });
+
   it('maps a deposit amount from metadata.amount (deposits use `amount`, not `cryptoAmount`)', async () => {
     const { svc } = makeService([depositRow], 1);
     const res = await svc.query('u1', { period: 'this_month' });

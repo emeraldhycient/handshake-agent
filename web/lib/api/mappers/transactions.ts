@@ -10,12 +10,11 @@ import type { ActivityGroup, ActivityItem, StatusTone } from "@/lib/schemas"
  *  (never hardcoded here — multi-currency aware, root §13). */
 export type FiatSymbols = Record<string, string>
 
-// `internal_transfer` is an outflow HERE because today only the SENDER gets a
-// Transaction row — the recipient-side row is a deferred follow-up. When
-// recipient rows are added, `internal_transfer` direction must become
-// per-viewer (from the API's per-row `direction`, or the ledger leg relative to
-// the viewer), NOT this static type map — otherwise the recipient's inflow
-// would render as a debit. Don't extend this Set to cover that case.
+// Per-viewer direction now comes from the API's per-row `direction` (both the
+// sender row `out` and the recipient row `in` for an internal transfer). This
+// type map is only the FALLBACK when a row carries no `direction` — keeping
+// `internal_transfer` here makes a legacy/handle-less row default to the
+// sender-side outflow. Don't rely on it for the recipient case.
 const OUT_TYPES = new Set(["sell", "send", "internal_transfer"])
 const IN_TYPES = new Set([
   "buy",
@@ -47,9 +46,6 @@ const TITLE: Record<string, (asset?: string) => string> = {
   buy: (a) => `Bought ${a ?? "crypto"}`,
   sell: (a) => `Sold ${a ?? "crypto"}`,
   send: (a) => `Sent ${a ?? "crypto"}`,
-  // Sender-side internal (PayID) transfer — same "Sent" framing as an on-chain
-  // send so the outflow reads consistently (see OUT_TYPES per-viewer caveat).
-  internal_transfer: (a) => `Sent ${a ?? "crypto"}`,
   receive: (a) => `Received ${a ?? "crypto"}`,
   deposit: (a) => `Deposit ${a ?? ""}`.trim(),
   ticket_purchase: () => "Ticket",
@@ -57,6 +53,20 @@ const TITLE: Record<string, (asset?: string) => string> = {
 
 const titleCase = (s: string) =>
   s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ")
+
+/**
+ * Row title. An internal (PayID) transfer is direction-aware — the recipient row
+ * reads "Received", the sender row "Sent" — since both share the
+ * `internal_transfer` type. Everything else keys off the type map.
+ */
+function titleFor(type: string, asset: string | undefined, dir: Dir): string {
+  if (type === "internal_transfer")
+    return dir === "in"
+      ? `Received ${asset ?? "crypto"}`
+      : `Sent ${asset ?? "crypto"}`
+  const fn = TITLE[type]
+  return fn ? fn(asset) : titleCase(type)
+}
 
 // Terminal-failure statuses get the distinct `danger` tone so a failed/refunded
 // transaction never looks like one still in flight (audit #24). The backend
@@ -115,12 +125,17 @@ function amountFor(
 function subFor(
   it: TransactionListItem,
   d: Date,
+  dir: Dir,
   fiatSymbols: FiatSymbols
 ): string {
   const parts = [timeLabel(d)]
-  if (it.counterparty)
-    parts.push(`to ${it.counterparty.slice(0, 4)}…${it.counterparty.slice(-4)}`)
-  else if (it.fiatAmount && it.fiatCurrency)
+  if (it.counterparty) {
+    // An inflow arrives "from" its counterparty; an outflow goes "to" it.
+    const prep = dir === "in" ? "from" : "to"
+    parts.push(
+      `${prep} ${it.counterparty.slice(0, 4)}…${it.counterparty.slice(-4)}`
+    )
+  } else if (it.fiatAmount && it.fiatCurrency)
     parts.push(
       formatFiatAmount(it.fiatAmount, fiatSymbols[it.fiatCurrency] ?? "")
     )
@@ -136,7 +151,9 @@ export function mapTransactions(
   const byLabel = new Map<string, ActivityItem[]>()
   for (const it of res.items) {
     const d = new Date(it.createdAt)
-    const dir = dirFor(it.type)
+    // Prefer the API's per-viewer direction (internal transfers carry it per
+    // row); fall back to the type map for legacy/other rows.
+    const dir = it.direction ?? dirFor(it.type)
     const style = DIR_STYLE[dir]
     const sign = dir === "in" ? "+" : "-"
     const item: ActivityItem = {
@@ -145,8 +162,8 @@ export function mapTransactions(
       icon: style.icon,
       tint: style.tint,
       col: style.col,
-      title: (TITLE[it.type] ?? (() => titleCase(it.type)))(it.asset),
-      sub: subFor(it, d, fiatSymbols),
+      title: titleFor(it.type, it.asset, dir),
+      sub: subFor(it, d, dir, fiatSymbols),
       amount: amountFor(it, sign, fiatSymbols),
       status: titleCase(it.status),
       statusTone: toneFor(it.status),

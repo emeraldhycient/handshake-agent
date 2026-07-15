@@ -1255,31 +1255,10 @@ export class ProposalService {
       (isNegTo ? '-' : '') + wholeTo.toString() + fracToStr;
 
     // 7. KYC/velocity gate on the NGN-equivalent of fromAmount (§3.3).
-    // Use baseRate for the fromAsset.
-    const pricingConfig = this.configService.get<PricingConfig>('pricing');
-    const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate = resolveEffectiveBaseRate(
-      pricingConfig,
-      this.effectiveLiveStore(),
-      fromAsset,
-      baseFiat,
-      this.clock.now(),
-      this.feedStalenessSec(),
-    );
-    const LEDGER_SCALE = 10n ** 18n;
-    const scaledFrom = toScaled(amount);
-    const scaledNgn18 =
-      (scaledFrom * toScaled(String(baseRate))) / LEDGER_SCALE;
-    const isNegNgn = scaledNgn18 < 0n;
-    const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;
-    const wholeNgn = absNgn / LEDGER_SCALE;
-    const fracNgn = absNgn % LEDGER_SCALE;
-    const fracNgnStr =
-      fracNgn === 0n
-        ? ''
-        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
-    const ngnEquivalentStr =
-      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
+    // Use baseRate for the fromAsset. Same BigInt-exact computation as the send
+    // + internal-transfer paths — shared via the one helper (§13.2, no drift).
+    const { baseFiat, ngnEquivalent: ngnEquivalentStr } =
+      this.resolveGateFiatEquivalent(fromAsset, amount);
 
     await this.kycGate.assertCanTransact({
       userId,

@@ -42,6 +42,7 @@ import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { IdentityService } from '../../identity/application/identity.service';
+import { HandleService } from '../../identity/application/handle.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import type { WithdrawOutput } from '../../wallets/application/ports/wallet-provider.port';
@@ -415,6 +416,12 @@ export class ExecutionService {
     // execution re-quote uses the SAME live rate the proposal did (no drift).
     @Optional()
     private readonly liveRateStore?: LiveRateStore,
+    // @Optional so the existing unit suite (positional construction) resolves
+    // without it. Production injects it (IdentityModule exports HandleService) so
+    // executeInternalTransfer can audit-snapshot the SENDER's @handle onto the
+    // recipient-side Transaction row — a read-only identity lookup (§3.1).
+    @Optional()
+    private readonly handleService?: HandleService,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
@@ -2013,6 +2020,25 @@ export class ExecutionService {
     });
     const year = now.getFullYear().toString();
 
+    // Snapshot the SENDER's own @handle for the recipient-side row's "from @A"
+    // counterparty. Read-only identity lookup (§3.1), formatted `@handle` to
+    // mirror how the recipient handle is stored (web-chat resolves `@${handle}`).
+    // Best-effort: a sender with no claimed handle yields no counterparty rather
+    // than blocking the money move.
+    let senderHandle: string | undefined;
+    let senderDisplayName: string | undefined;
+    if (this.handleService !== undefined) {
+      try {
+        const own = await this.handleService.findOwnHandle(userId);
+        if (own !== null) {
+          senderHandle = `@${own.handle}`;
+          senderDisplayName = own.displayName;
+        }
+      } catch {
+        // display-only; never block the transfer
+      }
+    }
+
     const result = await this.settlementRepo.settleInternalTransferAtomic({
       proposalId,
       senderUserId: userId,
@@ -2023,6 +2049,8 @@ export class ExecutionService {
       cryptoAmount,
       recipientHandle,
       recipientDisplayName,
+      senderHandle,
+      senderDisplayName,
       assetDecimals: assetMeta.decimals,
       idempotencyKey,
       requestChecksum,

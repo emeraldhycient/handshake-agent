@@ -525,6 +525,61 @@ describe('Internal transfer vertical — e2e (AppModule, Testcontainers Postgres
   }, 120_000);
 
   // ===========================================================================
+  // TEST 1b — recipient-side Transaction row (per-viewer direction)
+  // ===========================================================================
+
+  it('after A→B, the RECIPIENT sees an incoming row (direction=in, +amount, counterparty=@sender) and the SENDER an outgoing one (direction=out)', async () => {
+    const a = await mintTransferUser('rowa');
+    const b = await mintTransferUser('rowb');
+    await seedUsdtBalance(a.userId, 100);
+
+    const res = await postHandleSend(a.accessToken, b.payId, '5');
+    const proposalId = (res.body as { outcome: { proposalId: string } }).outcome
+      .proposalId;
+    const execRes = await authorizeAndExecute(a.accessToken, proposalId);
+    expect((execRes.body as { status: string }).status).toBe('completed');
+
+    // Recipient B's activity feed — the incoming transfer must be visible.
+    const bList = await request(app.getHttpServer())
+      .get('/transactions')
+      .set('Authorization', `Bearer ${b.accessToken}`)
+      .expect(200);
+    const bRow = (
+      bList.body as {
+        items: Array<{
+          type: string;
+          direction?: string;
+          cryptoAmount?: string;
+          counterparty?: string;
+        }>;
+      }
+    ).items.find((i) => i.type === 'internal_transfer');
+    expect(bRow).toBeDefined();
+    expect(bRow!.direction).toBe('in');
+    expect(Number(bRow!.cryptoAmount)).toBe(5);
+    // Counterparty = the SENDER's @handle (snapshotted via HandleService).
+    expect(bRow!.counterparty).toBe(`@${a.payId}`);
+
+    // Sender A's activity feed — the outgoing transfer reads direction=out.
+    const aList = await request(app.getHttpServer())
+      .get('/transactions')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .expect(200);
+    const aRow = (
+      aList.body as {
+        items: Array<{
+          type: string;
+          direction?: string;
+          counterparty?: string;
+        }>;
+      }
+    ).items.find((i) => i.type === 'internal_transfer');
+    expect(aRow).toBeDefined();
+    expect(aRow!.direction).toBe('out');
+    expect(aRow!.counterparty).toBe(`@${b.payId}`);
+  }, 120_000);
+
+  // ===========================================================================
   // TEST 2 — /auth/me carries a valid payId
   // ===========================================================================
 

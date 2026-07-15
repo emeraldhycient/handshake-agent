@@ -279,11 +279,21 @@ export class TransactionHistoryService {
           : `${fiatCurrency} ${fiatRaw}`
         : undefined;
 
+    // Per-viewer direction: prefer the metadata snapshot (internal transfers set
+    // it per row — 'in' recipient / 'out' sender), fall back to the type heuristic.
+    const metaDirection = meta.direction;
+    const direction: 'in' | 'out' =
+      metaDirection === 'in' || metaDirection === 'out'
+        ? metaDirection
+        : INFLOW_TYPES.has(row.type)
+          ? 'in'
+          : 'out';
+
     return {
       id: row.id,
       type: row.type,
       status: row.status,
-      direction: INFLOW_TYPES.has(row.type) ? 'in' : 'out',
+      direction,
       ...(asset ? { asset } : {}),
       ...(cryptoDisplay ? { cryptoAmount: cryptoDisplay } : {}),
       ...(fiatDisplay ? { fiatAmount: fiatDisplay } : {}),

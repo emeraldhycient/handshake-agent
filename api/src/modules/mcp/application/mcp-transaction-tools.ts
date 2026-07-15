@@ -154,18 +154,31 @@ function buildTransactionStatusPayload(
           currency: str('fiatCurrency'),
         }
       : undefined;
-  // destination (send) → senderAddress (deposit) → recipientHandle (internal
-  // transfer, which has no address/destination). Kept in lockstep with the chat
-  // TransactionStatusController projection (proposal.controller.ts).
+  // destination (send) → senderAddress (deposit) → recipientHandle
+  // (internal_transfer sender row) → senderHandle (internal_transfer recipient
+  // row — "from @A"). Kept in lockstep with the chat TransactionStatusController
+  // projection (proposal.controller.ts).
   const counterparty =
-    str('destination') ?? str('senderAddress') ?? str('recipientHandle');
+    str('destination') ??
+    str('senderAddress') ??
+    str('recipientHandle') ??
+    str('senderHandle');
   const cryptoAmount = str('cryptoAmount') ?? str('amount');
+  // Per-viewer direction: prefer the metadata snapshot (internal transfers set it
+  // per row — 'in' recipient / 'out' sender), fall back to the type heuristic.
+  const metaDirection = meta.direction;
+  const direction =
+    metaDirection === 'in' || metaDirection === 'out'
+      ? metaDirection
+      : INFLOW_TYPES.has(transaction.type)
+        ? 'in'
+        : 'out';
 
   return TransactionStatusResponseSchema.parse({
     id: transaction.id,
     type: transaction.type,
     status: transaction.status,
-    direction: INFLOW_TYPES.has(transaction.type) ? 'in' : 'out',
+    direction,
     ...(receiptNumber !== null ? { receiptNumber } : {}),
     ...(payment !== undefined ? { payment } : {}),
     ...(str('asset') !== undefined ? { asset: str('asset') } : {}),

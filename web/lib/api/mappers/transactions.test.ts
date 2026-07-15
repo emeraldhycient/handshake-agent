@@ -77,6 +77,54 @@ describe("mapTransactions", () => {
     expect(item.icon).toBe("↗")
   })
 
+  it("maps a recipient internal_transfer (direction:'in') as an INCOMING credit", () => {
+    // The recipient-side row carries an explicit per-viewer direction:'in' — it
+    // must read as money ARRIVING: dir:'in', a leading "+", the inflow icon, and
+    // a "Received" title (never "Sent"), regardless of the type map.
+    const r: TransactionListResponse = {
+      items: [
+        {
+          id: "itr",
+          type: "internal_transfer",
+          status: "completed",
+          asset: "USDT",
+          cryptoAmount: "3",
+          direction: "in",
+          counterparty: "@ada",
+          createdAt: "2026-06-29T13:00:00.000Z",
+        },
+      ],
+    }
+    const item = mapTransactions(r, now)[0].items[0]
+    expect(item.dir).toBe("in")
+    expect(item.amount).toBe("+3 USDT")
+    expect(item.icon).toBe("+")
+    expect(item.title).toBe("Received USDT")
+    // An inflow reads as arriving "from" the counterparty, not "to".
+    expect(item.sub).toContain("from")
+    expect(item.sub).not.toContain("to @")
+  })
+
+  it("maps a sender internal_transfer (direction:'out') as an OUTGOING debit titled 'Sent'", () => {
+    const r: TransactionListResponse = {
+      items: [
+        {
+          id: "its",
+          type: "internal_transfer",
+          status: "completed",
+          asset: "USDT",
+          cryptoAmount: "3",
+          direction: "out",
+          createdAt: "2026-06-29T13:00:00.000Z",
+        },
+      ],
+    }
+    const item = mapTransactions(r, now)[0].items[0]
+    expect(item.dir).toBe("out")
+    expect(item.amount).toBe("-3 USDT")
+    expect(item.title).toBe("Sent USDT")
+  })
+
   it("formats fiat amounts with the provided symbol map (no hardcoded NGN)", () => {
     const r: TransactionListResponse = {
       items: [

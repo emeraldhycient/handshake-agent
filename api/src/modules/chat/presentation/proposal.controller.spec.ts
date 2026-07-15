@@ -963,6 +963,32 @@ describe('TransactionStatusController', () => {
     expect(result.counterparty).toBe('@ada');
   });
 
+  it('uses the recipient-row metadata.direction=in + senderHandle counterparty for an incoming internal_transfer', async () => {
+    // The RECIPIENT-side internal_transfer row snapshots direction:'in' and the
+    // SENDER's @handle — the projection must honour the per-row direction (not
+    // the type map, which would force 'out') and fall back to senderHandle.
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          direction: 'in',
+          role: 'recipient',
+          senderUserId: 'sender-user-1',
+          senderHandle: '@sam.pay',
+        },
+      }),
+    );
+    mockSettlementRepo.findReceiptNumber.mockResolvedValue(null);
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.direction).toBe('in');
+    expect(result.counterparty).toBe('@sam.pay');
+  });
+
   it('omits on-chain fields when not present in metadata', async () => {
     mockTransactionRepo.findById.mockResolvedValue(
       makeTransaction({
@@ -1009,6 +1035,42 @@ describe('TransactionStatusController', () => {
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0].counterparty).toBe('@ada');
+  });
+
+  it('list carries the per-row direction: recipient internal_transfer → in (senderHandle counterparty), sender → out', async () => {
+    mockTransactionRepo.findByUserId.mockResolvedValue([
+      makeTransaction({
+        id: 'aaaaaaaa-0000-7000-8000-00000000000a',
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          direction: 'in',
+          role: 'recipient',
+          senderHandle: '@sam.pay',
+        },
+      }),
+      makeTransaction({
+        id: 'aaaaaaaa-0000-7000-8000-00000000000b',
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          direction: 'out',
+          role: 'sender',
+          recipientHandle: '@ada',
+        },
+      }),
+    ]);
+
+    const result = await controller.list(TEST_USER);
+
+    expect(result.items[0].direction).toBe('in');
+    expect(result.items[0].counterparty).toBe('@sam.pay');
+    expect(result.items[1].direction).toBe('out');
+    expect(result.items[1].counterparty).toBe('@ada');
   });
 });
 

@@ -27,6 +27,15 @@ export interface IHandleRepository {
   /** Case-insensitive lookup of a User by payId. Null if no user claims it. */
   findUserByPayId(handleLower: string): Promise<HandleOwnerRecord | null>;
 
+  /**
+   * The user's OWN public handle, resolved by internal user id: their PayID when
+   * claimed, else their earliest public nickname, with the KYC name for a
+   * minimal-reveal display. Null when the user has claimed neither. Used to
+   * audit-snapshot the SENDER's handle onto an internal-transfer recipient row
+   * (the counterparty identity the recipient's activity shows).
+   */
+  findHandleByUserId(userId: string): Promise<HandleOwnerRecord | null>;
+
   /** Case-insensitive lookup of a PublicAlias owner. Null if no alias matches. */
   findAliasOwner(handleLower: string): Promise<HandleOwnerRecord | null>;
 

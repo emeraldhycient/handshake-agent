@@ -699,6 +699,39 @@ describe('McpToolsService — transaction tools', () => {
     await close();
   });
 
+  it('get_transaction surfaces the senderHandle counterparty + direction=in for a recipient internal_transfer row', async () => {
+    // The RECIPIENT-side row snapshots direction:'in' and the SENDER's @handle.
+    // The projection must honour the per-row direction and show "from @A".
+    const fakes = makeFakes();
+    fakes.transactionRepo.findById.mockResolvedValue({
+      id: TX_ID,
+      userId: USER_ID,
+      type: 'internal_transfer',
+      status: 'completed',
+      metadata: {
+        asset: 'USDT',
+        cryptoAmount: '3.00',
+        direction: 'in',
+        role: 'recipient',
+        senderUserId: 'sender-user-1',
+        senderHandle: '@sam.pay',
+      },
+      createdAt: new Date('2026-07-15T10:00:00Z'),
+    });
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'get_transaction', {
+      transactionId: TX_ID,
+    });
+    const payload = payloadOf(result);
+    expect(payload).toMatchObject({
+      id: TX_ID,
+      type: 'internal_transfer',
+      direction: 'in',
+      counterparty: '@sam.pay',
+    });
+    await close();
+  });
+
   it('list_pending_proposals lists lifecycle fields + web-app instruction — never raw parameters', async () => {
     const fakes = makeFakes();
     const { client, close } = await connect(makeService(fakes), ['read']);

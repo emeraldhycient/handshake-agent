@@ -1109,6 +1109,25 @@ async function reverseVelocityIncrementsInSettle(
   });
 }
 
+/**
+ * Derives a deterministic, syntactically-valid UUID from a seed string. Used to
+ * key the RECIPIENT-side internal-transfer Transaction row off the sender's
+ * idempotencyKey (`<senderKey>:recipient`): the Transaction.idempotencyKey column
+ * is `uuid`, so it cannot store the raw suffixed string. Deterministic (a replay
+ * maps to the same key) and collision-resistant (sha256). Not RFC-versioned —
+ * Postgres validates only the 8-4-4-4-12 hex shape for a uuid column.
+ */
+function deterministicUuidFromSeed(seed: string): string {
+  const hex = createHash('sha256').update(seed, 'utf8').digest('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join('-');
+}
+
 /** Reconstructs a canonical decimal string from a 10^18-scaled bigint (mirror of ledger.fromScaled). */
 function fromScaledDecimalString(scaled: bigint): string {
   const SCALE = 10n ** 18n;
@@ -2896,6 +2915,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       cryptoAmount,
       recipientHandle,
       recipientDisplayName,
+      senderHandle,
+      senderDisplayName,
       assetDecimals,
       idempotencyKey,
       requestChecksum,
@@ -3001,10 +3022,10 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           accountStates,
         });
 
-        // ── 5. Create the anchor Transaction (internal_transfer, completed) ────
-        // ONE sender-owned Transaction with the 2 ledger legs — the recipient's
-        // credit is authoritative via the ledger + WalletBalance snapshot
-        // (mirrors manual credit's single-anchor model).
+        // ── 5. Create the anchor (SENDER) Transaction (internal_transfer) ──────
+        // Sender-owned, direction 'out', carrying the 2 ledger legs. The
+        // recipient's credit is authoritative via the ledger + WalletBalance
+        // snapshot; the recipient's own display row is created in 5b below.
         const created = await tx.transaction.create({
           data: {
             userId: senderUserId,
@@ -3014,6 +3035,10 @@ export class SettlementPrismaRepository implements ISettlementRepository {
             idempotencyKey,
             requestChecksum,
             metadata: {
+              // Per-viewer direction: the sender sees this transfer as an outflow.
+              // The read projections prefer metadata.direction over the type map.
+              direction: 'out',
+              role: 'sender',
               asset,
               cryptoAmount,
               recipientUserId,
@@ -3036,6 +3061,44 @@ export class SettlementPrismaRepository implements ISettlementRepository {
             completedAt: now,
           },
           select: TRANSACTION_SELECT_SELL,
+        });
+
+        // ── 5b. Create the RECIPIENT-side Transaction (display/audit artifact) ─
+        // Owned by the recipient, direction 'in', linked to the sender row via
+        // counterpartyTransactionId. This is ADDITIVE ONLY — it has NO ledger
+        // legs of its own (the double-entry stays on the sender row), NO velocity
+        // increment (receiving is not the recipient's money-move), and NO receipt.
+        // Its idempotencyKey is DERIVED from the sender's (a deterministic uuid),
+        // so the §3.1 sender-key idempotency guard above — which returns BEFORE
+        // creating EITHER row — is the single replay guard for both rows.
+        await tx.transaction.create({
+          data: {
+            userId: recipientUserId,
+            // No proposalId — Transaction.proposalId is @unique and the sender
+            // row already claims this transfer's proposal.
+            type: TransactionType.internal_transfer,
+            status: TransactionStatus.completed,
+            idempotencyKey: deterministicUuidFromSeed(
+              `${idempotencyKey}:recipient`,
+            ),
+            requestChecksum,
+            metadata: {
+              // Per-viewer direction: the recipient sees this transfer as an inflow.
+              direction: 'in',
+              role: 'recipient',
+              asset,
+              cryptoAmount,
+              senderUserId,
+              // Audit-snapshot the SENDER's @handle + display name so the
+              // recipient's read projections surface "from @A".
+              ...(senderHandle !== undefined ? { senderHandle } : {}),
+              ...(senderDisplayName !== undefined ? { senderDisplayName } : {}),
+              // Links the two rows as one transfer.
+              counterpartyTransactionId: created.id,
+            },
+            executedAt: now,
+            completedAt: now,
+          },
         });
 
         // ── 6. Flip the Proposal to a terminal 'executed' (single-phase) ──────
