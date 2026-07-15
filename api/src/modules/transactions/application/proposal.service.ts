@@ -410,7 +410,17 @@ export class ProposalService {
   async createBuyProposal(
     input: CreateBuyProposalInput,
   ): Promise<CreateBuyProposalOutput> {
-    const { userId, conversationId, intent } = input;
+    const { userId, conversationId } = input;
+    // Single resolution point (multi-currency ergonomics, CLAUDE.md §7): the
+    // engine is the authoritative entry point for both the web and WhatsApp
+    // chat handlers, so it must not assume an upstream caller already
+    // resolved fiatCurrency — default to the catalog base fiat here when the
+    // intent omits it, mirroring the get_rate path.
+    const intent = {
+      ...input.intent,
+      fiatCurrency:
+        input.intent.fiatCurrency ?? this.assetRegistry.defaultFiat(),
+    };
     const now = this.clock.now();
 
     // 0. Amount-floor guard (findings #2/#3/#6) — BEFORE pricing and the KYC
@@ -528,7 +538,14 @@ export class ProposalService {
   async createSellProposal(
     input: CreateSellProposalInput,
   ): Promise<CreateSellProposalOutput> {
-    const { userId, conversationId, intent, beneficiaryId } = input;
+    const { userId, conversationId, beneficiaryId } = input;
+    // Single resolution point (multi-currency ergonomics, CLAUDE.md §7) — see
+    // the matching comment in createBuyProposal.
+    const intent = {
+      ...input.intent,
+      fiatCurrency:
+        input.intent.fiatCurrency ?? this.assetRegistry.defaultFiat(),
+    };
     const now = this.clock.now();
 
     // 0. Amount-floor guard (finding #4) — BEFORE quoting / balance / gate.

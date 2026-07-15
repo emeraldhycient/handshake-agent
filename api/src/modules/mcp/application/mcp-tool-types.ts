@@ -67,7 +67,7 @@ export interface McpToolDeps {
   proposalRepo: Pick<IProposalRepository, 'listPendingForUser'>;
   registry: Pick<
     AssetRegistry,
-    'asset' | 'network' | 'defaultNetworkFor' | 'publicView'
+    'asset' | 'network' | 'defaultNetworkFor' | 'publicView' | 'defaultFiat'
   >;
   /** Layered config — capability→min-tier gating for KYC-gated read tools. */
   config: Pick<EffectiveConfigService, 'get'>;

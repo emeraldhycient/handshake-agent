@@ -106,6 +106,7 @@ interface TicketListBody {
     ticketType: string;
     quantity: number;
     totalAmount: string;
+    currency: string;
   }[];
   nextCursor: string | null;
 }
@@ -299,7 +300,11 @@ describe('Admin Agent console + Tickets oversight — e2e (AppModule, Testcontai
     return { conversationId: conversation.id, contactId: contact.id };
   }
 
-  /** Seed a User + a TicketOrder. Returns the order id. */
+  /**
+   * Seed a User + a TicketOrder in a NON-default currency (USD) — proves the
+   * admin feed threads the order's own `currency` column through rather than
+   * assuming the catalog's historical NGN default. Returns the order id.
+   */
   async function seedTicketOrder(): Promise<string> {
     const user = await prisma.user.create({
       data: { email: 'ticket-buyer@e2e.test', status: 'active' },
@@ -314,6 +319,7 @@ describe('Admin Agent console + Tickets oversight — e2e (AppModule, Testcontai
         unitPrice: '5000.00',
         platformFee: '0.00',
         totalAmount: '10000.00',
+        currency: 'USD',
         idempotencyKey: '99999999-9999-9999-9999-999999999999',
       },
     });
@@ -419,6 +425,9 @@ describe('Admin Agent console + Tickets oversight — e2e (AppModule, Testcontai
     // padding zeros: "10000.00" → "10000"); assert by numeric value, not padding.
     expect(typeof order!.totalAmount).toBe('string');
     expect(Number(order!.totalAmount)).toBe(10000);
+    // The seeded order is USD, not the catalog default (NGN) — proves the feed
+    // threads the order's own currency column, never a hardcoded literal.
+    expect(order!.currency).toBe('USD');
   }, 90_000);
 
   it('returns a well-formed ticket-orders list shape ({ items, nextCursor })', async () => {

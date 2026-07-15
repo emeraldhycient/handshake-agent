@@ -24,8 +24,10 @@ export interface TicketOrderRecord {
   vendorKey: string;
   ticketType: string;
   quantity: number;
-  /** Canonical decimal string (NGN) — never a JS float. */
+  /** Canonical decimal string — never a JS float. Denominated in `currency`. */
   totalAmount: string;
+  /** ISO fiat code `totalAmount` is denominated in — never assume NGN. */
+  currency: string;
   paymentStatus: string;
   settlementStatus: string;
   deliveryStatus: string;

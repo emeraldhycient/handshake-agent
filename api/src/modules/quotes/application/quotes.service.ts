@@ -31,10 +31,8 @@ export class QuotesService {
   ) {}
 
   async quoteBuy(input: QuoteBuyInput): Promise<QuoteBuyOutput> {
-    const rate = await this.rateProvider.getRate(
-      input.asset,
-      input.fiatCurrency,
-    );
+    const fiatCurrency = this.resolveFiatCurrency(input.fiatCurrency);
+    const rate = await this.rateProvider.getRate(input.asset, fiatCurrency);
 
     const breakdown = computeBuyQuote({
       // Single explicit coercion at the boundary; the value is already
@@ -49,7 +47,7 @@ export class QuotesService {
     return {
       asset: input.asset,
       fiatAmount: input.fiatAmount,
-      fiatCurrency: input.fiatCurrency,
+      fiatCurrency,
       cryptoAmount: breakdown.cryptoAmount,
       // Raw pre-spread market rate — stored in the Quote row for treasury/audit.
       baseRate: String(rate.baseRate),
@@ -141,10 +139,8 @@ export class QuotesService {
    * never moves money.
    */
   async quoteSell(input: QuoteSellInput): Promise<QuoteSellOutput> {
-    const rate = await this.rateProvider.getRate(
-      input.asset,
-      input.fiatCurrency,
-    );
+    const fiatCurrency = this.resolveFiatCurrency(input.fiatCurrency);
+    const rate = await this.rateProvider.getRate(input.asset, fiatCurrency);
 
     const breakdown = computeSellQuote({
       // Single explicit coercion at the boundary; the value is already
@@ -158,7 +154,7 @@ export class QuotesService {
     return {
       asset: input.asset,
       cryptoAmount: input.cryptoAmount,
-      fiatCurrency: input.fiatCurrency,
+      fiatCurrency,
       netFiatAmount: String(breakdown.netFiat),
       // Raw pre-spread market rate — stored for treasury/audit.
       baseRate: String(rate.baseRate),
@@ -171,5 +167,26 @@ export class QuotesService {
       quotedAt: this.clock.now().toISOString(),
       expiresInSec: rate.expiresInSec,
     };
+  }
+
+  /**
+   * Single resolution point for `fiatCurrency` on the quoting vertical
+   * (multi-currency ergonomics): `quote_buy`/`quote_sell` no longer force a
+   * fiat choice on every caller (HTTP controller, MCP tools, the proposal
+   * engine). When the caller omits it, default to the catalog base fiat —
+   * never a hardcoded currency (CLAUDE.md §7) — mirroring the get_rate path.
+   * AssetRegistry is only optional on this class for legacy test
+   * construction; every real (DI-wired) instance has it, so an undefined
+   * registry combined with an omitted fiatCurrency is a configuration bug,
+   * not a case to paper over with a hardcoded fallback.
+   */
+  private resolveFiatCurrency(fiatCurrency: string | undefined): string {
+    const resolved = fiatCurrency ?? this.assetRegistry?.defaultFiat();
+    if (resolved === undefined) {
+      throw new Error(
+        'QuotesService: fiatCurrency was omitted and no AssetRegistry is available to resolve the catalog default.',
+      );
+    }
+    return resolved;
   }
 }

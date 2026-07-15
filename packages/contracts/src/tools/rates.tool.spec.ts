@@ -25,9 +25,9 @@ describe('GetRateInputSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('defaults fiatCurrency to NGN when omitted', () => {
+  it('accepts a pair with no fiat (calling layer defaults it)', () => {
     const result = GetRateInputSchema.parse({ asset: 'USDT' })
-    expect(result.fiatCurrency).toBe('NGN')
+    expect(result.fiatCurrency).toBeUndefined()
   })
 
   it('rejects an unsupported asset', () => {

@@ -115,6 +115,11 @@ vi.mock("@/lib/device", () => ({
   getDeviceFingerprint: () => "web-test-fingerprint-0000",
 }))
 
+// DoneStep resolves the platform default fiat from /config — stub it so the
+// step renders without a real QueryClientProvider/network access.
+const useConfig = vi.hoisted(() => vi.fn())
+vi.mock("@/lib/query/hooks", () => ({ useConfig: () => useConfig() }))
+
 import { OnboardingWizard } from "./OnboardingWizard"
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -163,6 +168,13 @@ describe("OnboardingWizard", () => {
       error: undefined,
       status: "idle",
     }
+    useConfig.mockReturnValue({
+      data: {
+        fiats: [
+          { code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 },
+        ],
+      },
+    })
   })
 
   it("shows a loading state while /me is still resolving", () => {

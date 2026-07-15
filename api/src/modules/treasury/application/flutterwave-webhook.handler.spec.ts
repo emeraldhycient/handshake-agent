@@ -8,6 +8,7 @@
  */
 import { Logger } from '@nestjs/common';
 
+import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { ExecutionService } from '../../transactions/application/execution.service';
 import type { IdentityService } from '../../identity/application/identity.service';
 import type { IWhatsAppSender } from '../../whatsapp/application/ports/whatsapp-sender.port';
@@ -20,6 +21,7 @@ const USER_ID = 'user-id-abc';
 const RECEIPT_NUMBER = 'HS-2026-000001';
 const WA_ADDRESS = '2348012345678';
 const TXN_ID = 'txn-id-xyz';
+const DEFAULT_ASSET_SYMBOL = 'USDT';
 
 function makeEvent(payload: unknown): WebhookEventRecord {
   return {
@@ -42,6 +44,7 @@ function makeEvent(payload: unknown): WebhookEventRecord {
 function makeExecution(
   buy: 'completed' | 'pending' | 'throw' = 'completed',
   sell: 'completed' | 'failed' | 'pending' | 'throw' = 'completed',
+  buyAssetSymbol: string = DEFAULT_ASSET_SYMBOL,
 ) {
   const buyFn =
     buy === 'throw'
@@ -55,6 +58,7 @@ function makeExecution(
             status: 'completed',
             receiptNumber: RECEIPT_NUMBER,
             userId: USER_ID,
+            assetSymbol: buyAssetSymbol,
           });
   const sellFn =
     sell === 'throw'
@@ -83,9 +87,14 @@ function makeHandler(
     buy?: 'completed' | 'pending' | 'throw';
     sell?: 'completed' | 'failed' | 'pending' | 'throw';
     waAddress?: string | null;
+    buyAssetSymbol?: string;
   } = {},
 ) {
-  const execution = makeExecution(o.buy ?? 'completed', o.sell ?? 'completed');
+  const execution = makeExecution(
+    o.buy ?? 'completed',
+    o.sell ?? 'completed',
+    o.buyAssetSymbol ?? DEFAULT_ASSET_SYMBOL,
+  );
   const identity = {
     findWhatsAppAddress: jest
       .fn()
@@ -94,12 +103,24 @@ function makeHandler(
   const sender = {
     sendText: jest.fn().mockResolvedValue({ externalMessageId: 'x' }),
   };
+  const assetDisplayNames: Record<string, string> = {
+    [DEFAULT_ASSET_SYMBOL]: 'USDT',
+    USDC: 'USD Coin',
+  };
+  const assetRegistry = {
+    asset: jest.fn().mockImplementation((symbol: string) => ({
+      symbol,
+      displayName: assetDisplayNames[symbol] ?? symbol,
+    })),
+    defaultCryptoAsset: jest.fn().mockReturnValue(DEFAULT_ASSET_SYMBOL),
+  };
   const handler = new FlutterwaveWebhookHandler(
     execution as unknown as ExecutionService,
     identity as unknown as IdentityService,
     sender as unknown as IWhatsAppSender,
+    assetRegistry as unknown as AssetRegistry,
   );
-  return { handler, execution, identity, sender };
+  return { handler, execution, identity, sender, assetRegistry };
 }
 
 describe('FlutterwaveWebhookHandler', () => {
@@ -129,6 +150,19 @@ describe('FlutterwaveWebhookHandler', () => {
       expect(sender.sendText).toHaveBeenCalledWith(
         WA_ADDRESS,
         expect.stringContaining(RECEIPT_NUMBER),
+      );
+    });
+
+    it('renders the settled asset display name, not a hardcoded literal', async () => {
+      const { handler, sender } = makeHandler({ buyAssetSymbol: 'USDC' });
+      await handler.handle(makeEvent(body()));
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('USD Coin'),
+      );
+      expect(sender.sendText).not.toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('Your USDT'),
       );
     });
 

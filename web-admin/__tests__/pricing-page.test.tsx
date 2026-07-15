@@ -15,7 +15,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { ChangeRequest, EffectiveSetting } from "@handshake-agent/contracts"
+import type {
+  ChangeRequest,
+  EffectiveSetting,
+} from "@handshake-agent/contracts"
 
 import { PricingPage } from "@/components/admin/pricing-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
@@ -25,6 +28,7 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
   setSetting: vi.fn(),
+  getPublicConfig: vi.fn(),
 }))
 
 // The four-eyes maker-checker raise (POST /admin/approvals).
@@ -37,7 +41,11 @@ vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
 }))
 
-import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import {
+  getPublicConfig,
+  listEffectiveSettings,
+  setSetting,
+} from "@/lib/api/config"
 import { createChange } from "@/lib/api/approvals"
 import { getMe } from "@/lib/api/admin"
 
@@ -45,6 +53,7 @@ const mockList = vi.mocked(listEffectiveSettings)
 const mockSet = vi.mocked(setSetting)
 const mockCreate = vi.mocked(createChange)
 const mockGetMe = vi.mocked(getMe)
+const mockGetPublicConfig = vi.mocked(getPublicConfig)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -111,15 +120,14 @@ async function advanceToApproval(
   user: ReturnType<typeof userEvent.setup>,
   newSpread: string
 ) {
-  const input = screen.getByRole("textbox", { name: "New spread (basis points)" })
+  const input = screen.getByRole("textbox", {
+    name: "New spread (basis points)",
+  })
   await user.clear(input)
   await user.type(input, newSpread)
   await user.click(screen.getByRole("button", { name: "Continue" }))
   // reason leg
-  await user.type(
-    screen.getByRole("textbox", { name: "Reason" }),
-    "Repricing"
-  )
+  await user.type(screen.getByRole("textbox", { name: "Reason" }), "Repricing")
   await user.click(screen.getByRole("button", { name: "Continue" }))
   // dual-control submit (four-eyes copy)
   await user.click(screen.getByRole("button", { name: "Submit for approval" }))
@@ -151,6 +159,15 @@ beforeEach(() => {
     permissions: [],
     menus: [],
     pages: [],
+  })
+  mockGetPublicConfig.mockReset()
+  mockGetPublicConfig.mockResolvedValue({
+    fiats: [
+      { code: "NGN", displayName: "Nigerian Naira", symbol: "₦", decimals: 2 },
+    ],
+    assets: [],
+    networks: [],
+    capabilities: {},
   })
 })
 

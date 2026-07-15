@@ -14,6 +14,7 @@ const sampleRecord: TicketOrderRecord = {
   ticketType: 'VIP',
   quantity: 2,
   totalAmount: '10000.00',
+  currency: 'NGN',
   paymentStatus: 'pending',
   settlementStatus: 'pending',
   deliveryStatus: 'pending',
@@ -48,6 +49,7 @@ describe('AdminTicketService', () => {
         ticketType: 'VIP',
         quantity: 2,
         totalAmount: '10000.00',
+        currency: 'NGN',
         paymentStatus: 'pending',
         settlementStatus: 'pending',
         deliveryStatus: 'pending',
@@ -55,6 +57,18 @@ describe('AdminTicketService', () => {
       },
     ]);
     expect(result.nextCursor).toBeNull();
+  });
+
+  it('maps a non-default currency through, not a hardcoded NGN', async () => {
+    repo.list.mockResolvedValue({
+      items: [{ ...sampleRecord, totalAmount: '45.00', currency: 'USD' }],
+      nextCursor: null,
+    });
+
+    const result = await service.listOrders({});
+
+    expect(result.items[0].currency).toBe('USD');
+    expect(result.items[0].totalAmount).toBe('45.00');
   });
 
   it('returns an empty list when there are no orders', async () => {

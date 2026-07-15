@@ -209,7 +209,11 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
     const directiveRepo = new DirectivePrismaRepository(ps);
     const transactionRepo = new TransactionPrismaRepository(ps);
     const outboxRepo = new SettlementOutboxPrismaRepository(ps);
-    const settlementRepo = new SettlementPrismaRepository(ps, config);
+    const settlementRepo = new SettlementPrismaRepository(
+      ps,
+      config,
+      new AssetRegistry(config),
+    );
     const ledgerRepo = new LedgerPrismaRepository(ps);
     const pinRepo = new PinPrismaRepository(ps);
     const identityRepo = new IdentityPrismaRepository(ps);
@@ -603,7 +607,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         new QuotePrismaRepository(ps),
         new TransactionPrismaRepository(ps),
         new SettlementOutboxPrismaRepository(ps),
-        new SettlementPrismaRepository(ps, config),
+        new SettlementPrismaRepository(ps, config, new AssetRegistry(config)),
         quotesService,
         kycGate,
         new DirectiveService(
@@ -706,7 +710,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         new QuotePrismaRepository(ps),
         new TransactionPrismaRepository(ps),
         new SettlementOutboxPrismaRepository(ps),
-        new SettlementPrismaRepository(ps, config),
+        new SettlementPrismaRepository(ps, config, new AssetRegistry(config)),
         quotesService,
         kycGate,
         new DirectiveService(
@@ -782,7 +786,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         new QuotePrismaRepository(ps),
         new TransactionPrismaRepository(ps),
         new SettlementOutboxPrismaRepository(ps),
-        new SettlementPrismaRepository(ps, config),
+        new SettlementPrismaRepository(ps, config, new AssetRegistry(config)),
         quotesService,
         kycGate,
         new DirectiveService(

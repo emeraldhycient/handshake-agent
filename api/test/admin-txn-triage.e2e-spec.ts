@@ -42,7 +42,19 @@ import type { IPaymentProvider } from '../src/modules/treasury/application/ports
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
 import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import configuration from '../src/core/config/configuration';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
+
+/**
+ * Minimal catalog-bearing config source for the AssetRegistry the settlement
+ * repo now requires. Triage refunds render no fiat amounts, so the registry is
+ * never dereferenced here — it only needs to construct.
+ */
+const catalogConfigSource = {
+  get: <T>(key: string): T | undefined =>
+    key === 'catalog' ? (configuration().catalog as unknown as T) : undefined,
+};
 
 jest.setTimeout(180_000);
 
@@ -106,6 +118,7 @@ describe('Admin transaction triage — e2e (AppModule, Testcontainers Postgres)'
     settlementRepo = new SettlementPrismaRepository(
       prisma as unknown as PrismaService,
       new StubConfigService() as never,
+      new AssetRegistry(catalogConfigSource),
     );
 
     stopContainer = async () => {

@@ -10,6 +10,7 @@ const validItem = {
   ticketType: "VIP",
   quantity: 2,
   totalAmount: "10000.00",
+  currency: "NGN",
   paymentStatus: "pending",
   settlementStatus: "pending",
   deliveryStatus: "pending",
@@ -40,6 +41,20 @@ describe("TicketOrderItemSchema", () => {
     expect(() =>
       TicketOrderItemSchema.parse({ ...validItem, quantity: "2" }),
     ).toThrow();
+  });
+
+  it("accepts a non-default currency (never assumes NGN)", () => {
+    const parsed = TicketOrderItemSchema.parse({
+      ...validItem,
+      totalAmount: "45.00",
+      currency: "USD",
+    });
+    expect(parsed.currency).toBe("USD");
+  });
+
+  it("requires currency to be present", () => {
+    const { currency: _currency, ...withoutCurrency } = validItem;
+    expect(() => TicketOrderItemSchema.parse(withoutCurrency)).toThrow();
   });
 });
 

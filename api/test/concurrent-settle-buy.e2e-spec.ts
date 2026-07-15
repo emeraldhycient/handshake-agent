@@ -190,7 +190,11 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
     const directiveRepo = new DirectivePrismaRepository(ps);
     const transactionRepo = new TransactionPrismaRepository(ps);
     const outboxRepo = new SettlementOutboxPrismaRepository(ps);
-    const settlementRepo = new SettlementPrismaRepository(ps, config);
+    const settlementRepo = new SettlementPrismaRepository(
+      ps,
+      config,
+      new AssetRegistry(config),
+    );
     const pinRepo = new PinPrismaRepository(ps);
     const identityRepo = new IdentityPrismaRepository(ps);
     const velocityRepo = new VelocityPrismaRepository(ps);

@@ -237,7 +237,11 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
     const directiveRepo = new DirectivePrismaRepository(ps);
     const transactionRepo = new TransactionPrismaRepository(ps);
     outboxRepo = new SettlementOutboxPrismaRepository(ps);
-    const settlementRepo = new SettlementPrismaRepository(ps, config);
+    const settlementRepo = new SettlementPrismaRepository(
+      ps,
+      config,
+      assetRegistry,
+    );
     const ledgerRepo = new LedgerPrismaRepository(ps);
     const pinRepo = new PinPrismaRepository(ps);
     const identityRepo = new IdentityPrismaRepository(ps);

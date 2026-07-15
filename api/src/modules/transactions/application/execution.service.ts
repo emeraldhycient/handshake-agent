@@ -155,6 +155,12 @@ export interface SettleBuyResult {
    * the user's notification address without an additional DB lookup.
    */
   userId?: string;
+  /**
+   * The crypto asset symbol credited. Set only when status === 'completed' —
+   * receipt rendering must resolve its display name from the registry, never
+   * a hardcoded literal.
+   */
+  assetSymbol?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +239,8 @@ export interface SettleSendOnChainResult {
   status: 'completed' | 'failed' | 'pending';
   receiptNumber?: string;
   userId?: string;
+  /** The crypto asset symbol settled — receipt rendering must never hardcode it. */
+  assetSymbol?: string;
 }
 
 /**
@@ -702,10 +710,14 @@ export class ExecutionService {
     // ── Step 2: Idempotent path — already completed ─────────────────────────
     if (txn.status === 'completed') {
       const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      const idempotentMeta = txn.metadata as Record<string, string>;
+      const idempotentAsset =
+        idempotentMeta.asset ?? this.assetRegistry.defaultCryptoAsset();
       return {
         transactionId: txn.id,
         status: 'completed',
         userId: txn.userId,
+        assetSymbol: idempotentAsset,
         ...(receiptNumber !== null ? { receiptNumber } : {}),
       };
     }
@@ -779,6 +791,7 @@ export class ExecutionService {
       transactionId: txn.id,
       status: 'completed',
       userId: txn.userId,
+      assetSymbol: settleAsset,
       receiptNumber,
     };
   }
@@ -2117,10 +2130,14 @@ export class ExecutionService {
     // ── Step 2: Idempotent path ──────────────────────────────────────────────
     if (txn.status === 'completed') {
       const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      const idempotentMeta = txn.metadata as Record<string, string>;
+      const idempotentAsset =
+        idempotentMeta.asset ?? this.assetRegistry.defaultCryptoAsset();
       return {
         transactionId: txn.id,
         status: 'completed',
         userId: txn.userId,
+        assetSymbol: idempotentAsset,
         ...(receiptNumber !== null ? { receiptNumber } : {}),
       };
     }
@@ -2170,6 +2187,7 @@ export class ExecutionService {
         transactionId: txn.id,
         status: 'completed',
         userId: txn.userId,
+        assetSymbol: sendAsset,
         receiptNumber,
       };
     }
@@ -2197,6 +2215,7 @@ export class ExecutionService {
       transactionId: txn.id,
       status: 'failed',
       userId: txn.userId,
+      assetSymbol: sendAsset,
     };
   }
 

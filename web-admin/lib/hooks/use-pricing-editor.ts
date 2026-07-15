@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react"
 
-import { useAdminMe, useCreateChange, useSettings } from "@/lib/query/hooks"
+import {
+  useAdminMe,
+  useCreateChange,
+  usePublicConfig,
+  useSettings,
+} from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
@@ -22,6 +27,7 @@ import {
   spreadTarget,
 } from "@/lib/pricing/targets"
 import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
+import { DEFAULT_DISPLAY_FIAT } from "@/constants/currencies"
 import type {
   EditTarget,
   PricingBaseRateRow,
@@ -47,11 +53,20 @@ export function usePricingEditor() {
   const query = useSettings("Pricing")
   const settings = useMemo(() => query.data ?? [], [query.data])
 
-  const currencies = useMemo(() => pricingCurrencies(settings), [settings])
-  const [currency, setCurrency] = useState("NGN")
+  // The catalog's configured default fiat (first enabled `/config` currency) —
+  // never a hardcoded 'NGN' literal (root CLAUDE.md §7). Falls back to
+  // DEFAULT_DISPLAY_FIAT only until `/config` has resolved.
+  const publicConfig = usePublicConfig()
+  const defaultFiat = publicConfig.data?.fiats[0]?.code ?? DEFAULT_DISPLAY_FIAT
+
+  const currencies = useMemo(
+    () => pricingCurrencies(settings, defaultFiat),
+    [settings, defaultFiat]
+  )
+  const [currency, setCurrency] = useState(defaultFiat)
   const previewCurrency = currencies.includes(currency)
     ? currency
-    : (currencies[0] ?? "NGN")
+    : (currencies[0] ?? defaultFiat)
 
   const spreadRows = useMemo(
     () => buildSpreadRows(settings, previewCurrency),

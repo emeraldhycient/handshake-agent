@@ -41,6 +41,7 @@ import {
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { hmacHex } from '../../../core/crypto/hmac';
 import { acquireAccountAdvisoryLocks } from '../../../core/crypto/advisory-lock';
 import {
@@ -98,14 +99,17 @@ import type { TransactionRecord } from '../application/ports/transaction.reposit
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Ledger account ids for platform/treasury/processor/clearing accounts. */
+/**
+ * Ledger account ids for platform/treasury/processor/clearing accounts.
+ *
+ * The fiat bookkeeping accounts (processor/treasury/fees/payout) are NOT listed
+ * here: they are DERIVED per-currency from the transaction's `fiatCurrency` at the
+ * call site (`${fc}_processor` etc.), mirroring the domain builders in ledger.ts,
+ * so a non-NGN live fiat settles to its own accounts (multi-currency; §7).
+ */
 const ACCOUNT_IDS = {
-  NGN_PROCESSOR: 'ngn_processor',
-  NGN_TREASURY: 'ngn_treasury',
-  NGN_FEES: 'ngn_fees',
   USDT_TREASURY: 'usdt_treasury',
   USDT_SELL_CLEARING: 'usdt_sell_clearing',
-  NGN_PAYOUT: 'ngn_payout',
   USDT_SEND_CLEARING: 'usdt_send_clearing',
   USDT_NETWORK_OUT: 'usdt_network_out',
   USDT_FEES: 'usdt_fees',
@@ -134,9 +138,16 @@ async function fetchAccountStates(
   prisma: PrismaService,
   walletId: string,
   asset: string,
+  fiatCurrency: string,
 ): Promise<Record<AccountKey, AccountState>> {
   // Use string literals that match both the domain enum and the Prisma enum values.
   // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
+  // Multi-currency: the fiat legs are DERIVED from `fiatCurrency` — `${fc}_processor`
+  // / `${fc}_treasury` / `${fc}_fees`, currency=<fc> — EXACTLY mirroring
+  // buildBuyLedgerEntries (ledger.ts). Hardcoding NGN here read state for the wrong
+  // account for a non-NGN live fiat, so every leg recomputed sequence=1 and the 2nd
+  // settle P2002-collided. The crypto legs (user_wallet, usdt_treasury) are unchanged.
+  const fc = fiatCurrency.toLowerCase();
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -144,18 +155,18 @@ async function fetchAccountStates(
   }> = [
     {
       accountType: 'processor_settlement',
-      accountId: ACCOUNT_IDS.NGN_PROCESSOR,
-      currency: 'NGN',
+      accountId: `${fc}_processor`,
+      currency: fiatCurrency,
     },
     {
       accountType: 'treasury_reserve',
-      accountId: ACCOUNT_IDS.NGN_TREASURY,
-      currency: 'NGN',
+      accountId: `${fc}_treasury`,
+      currency: fiatCurrency,
     },
     {
       accountType: 'platform_float',
-      accountId: ACCOUNT_IDS.NGN_FEES,
-      currency: 'NGN',
+      accountId: `${fc}_fees`,
+      currency: fiatCurrency,
     },
     {
       accountType: 'user_wallet',
@@ -232,8 +243,13 @@ async function fetchSellReserveAccountStates(
 async function fetchSellFinalizeAccountStates(
   prisma: PrismaService,
   asset: string,
+  fiatCurrency: string,
 ): Promise<Record<string, AccountState>> {
   // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
+  // Multi-currency: the fiat payout legs are DERIVED from `fiatCurrency` —
+  // `${fc}_treasury` / `${fc}_payout`, currency=<fc> — mirroring
+  // buildSellFinalizeEntries (ledger.ts). The crypto legs are unchanged.
+  const fc = fiatCurrency.toLowerCase();
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -251,13 +267,13 @@ async function fetchSellFinalizeAccountStates(
     },
     {
       accountType: 'treasury_reserve',
-      accountId: ACCOUNT_IDS.NGN_TREASURY,
-      currency: 'NGN',
+      accountId: `${fc}_treasury`,
+      currency: fiatCurrency,
     },
     {
       accountType: 'processor_settlement',
-      accountId: ACCOUNT_IDS.NGN_PAYOUT,
-      currency: 'NGN',
+      accountId: `${fc}_payout`,
+      currency: fiatCurrency,
     },
   ];
 
@@ -577,14 +593,19 @@ function buildSellReceiptContent(input: {
   netFiatAmount: string;
   /** WN-4: crypto asset symbol (e.g. 'USDT', 'USDC'). */
   asset: string;
+  /** Multi-currency: fiat currency code (e.g. 'NGN', 'GHS') — never a literal. */
+  fiatCurrency: string;
+  /** Renders a fiat amount with the currency's symbol (bound to `fiatCurrency`). */
+  formatFiat: (amount: string) => string;
   issuedAt: Date;
 }): { htmlContent: string; itemized: Record<string, unknown> } {
-  const { asset } = input;
+  const { asset, fiatCurrency, formatFiat } = input;
   const itemized = {
     // WN-4: asset from input, not a hardcoded literal.
     asset,
     cryptoAmount: input.cryptoAmount,
-    fiatCurrency: 'NGN',
+    // Multi-currency: the fiat code from input, not a hardcoded 'NGN'.
+    fiatCurrency,
     netFiatAmount: input.netFiatAmount,
     type: 'sell',
   };
@@ -598,7 +619,7 @@ function buildSellReceiptContent(input: {
 <p>Transaction ID: ${input.transactionId}</p>
 <p>User ID: ${input.userId}</p>
 <p>Asset Sold: ${input.cryptoAmount} ${asset}</p>
-<p>NGN Payout: ${input.netFiatAmount}</p>
+<p>Payout: ${formatFiat(input.netFiatAmount)}</p>
 <p>Issued At: ${input.issuedAt.toISOString()}</p>
 </body>
 </html>`;
@@ -619,14 +640,23 @@ function buildReceiptContent(input: {
   processingFee: string;
   /** WN-4: crypto asset symbol (e.g. 'USDT', 'USDC'). */
   asset: string;
+  /** Multi-currency: fiat currency code (e.g. 'NGN', 'GHS') — never a literal. */
+  fiatCurrency: string;
+  /**
+   * Renders a fiat amount with the currency's symbol + grouping, bound to
+   * `fiatCurrency` by the caller (`AssetRegistry.formatFiat`). Injected so the
+   * builder stays pure (no registry import in this free function).
+   */
+  formatFiat: (amount: string) => string;
   issuedAt: Date;
 }): { htmlContent: string; itemized: Record<string, unknown> } {
-  const { asset } = input;
+  const { asset, fiatCurrency, formatFiat } = input;
   const itemized = {
     // WN-4: asset from input, not a hardcoded literal.
     asset,
     fiatAmount: input.fiatAmount,
-    fiatCurrency: 'NGN',
+    // Multi-currency: the fiat code from input, not a hardcoded 'NGN'.
+    fiatCurrency,
     cryptoAmount: input.cryptoAmount,
     processingFeeAmount: input.processingFee,
     totalFiat: input.fiatAmount,
@@ -642,9 +672,9 @@ function buildReceiptContent(input: {
 <p>User ID: ${input.userId}</p>
 <p>Asset: ${asset}</p>
 <p>Crypto Amount: ${input.cryptoAmount} ${asset}</p>
-<p>Fiat Amount: NGN ${input.fiatAmount}</p>
-<p>Processing Fee: NGN ${input.processingFee}</p>
-<p>Total Paid: NGN ${input.fiatAmount}</p>
+<p>Fiat Amount: ${formatFiat(input.fiatAmount)}</p>
+<p>Processing Fee: ${formatFiat(input.processingFee)}</p>
+<p>Total Paid: ${formatFiat(input.fiatAmount)}</p>
 <p>Issued At: ${input.issuedAt.toISOString()}</p>
 </body>
 </html>`;
@@ -1110,6 +1140,11 @@ export class SettlementPrismaRepository implements ISettlementRepository {
     // This follows the same pattern as other infrastructure providers
     // (blockradar, flutterwave) that read from env.
     private readonly config: ConfigService,
+    // AssetRegistry (hot-reloaded via @Global CatalogModule): the source of
+    // truth for a fiat's display symbol/decimals. Used to render receipt fiat
+    // amounts with the correct currency symbol for ANY config-live fiat, never
+    // a hardcoded 'NGN' (multi-currency; CLAUDE.md §7).
+    private readonly assets: AssetRegistry,
   ) {
     this.signingKey = this.config.get<string>('RECEIPT_SIGNING_KEY') ?? '';
   }
@@ -1145,17 +1180,21 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // Acquires pg_advisory_xact_lock for every account this buy settlement
         // touches so concurrent buys for the same user cannot race on sequence
         // allocation and produce P2002 (unique constraint on accountType, accountId,
-        // sequence). Locks are auto-released at transaction commit/rollback.
+        // currency, sequence). Locks are auto-released at transaction commit/rollback.
+        // Multi-currency: the fiat accounts are DERIVED from `fiatCurrency` so the
+        // lock covers the SAME accounts the ledger builder writes (a NGN-hardcoded
+        // lock would leave a non-NGN fiat account unserialized).
+        const fc = fiatCurrency.toLowerCase();
         await acquireAccountAdvisoryLocks(tx, [
           {
             accountType: 'processor_settlement',
-            accountId: ACCOUNT_IDS.NGN_PROCESSOR,
+            accountId: `${fc}_processor`,
           },
           {
             accountType: 'treasury_reserve',
-            accountId: ACCOUNT_IDS.NGN_TREASURY,
+            accountId: `${fc}_treasury`,
           },
-          { accountType: 'platform_float', accountId: ACCOUNT_IDS.NGN_FEES },
+          { accountType: 'platform_float', accountId: `${fc}_fees` },
           { accountType: 'user_wallet', accountId: walletId },
           {
             accountType: 'treasury_reserve',
@@ -1189,10 +1228,13 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // Cast the interactive tx client to PrismaService for our helper —
         // both have the same Prisma model API at runtime (safe boundary cast).
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
+        // Multi-currency: pass fiatCurrency so the fiat leg states are read for the
+        // ${fc}-derived accounts (matching buildBuyLedgerEntries), not hardcoded NGN.
         const accountStates = await fetchAccountStates(
           tx as unknown as PrismaService,
           walletId,
           asset,
+          fiatCurrency,
         );
 
         // ── 2. Build ledger entries (pure domain function, Task 4.4) ─────────
@@ -1237,10 +1279,11 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         await tx.walletBalance.create({
           data: {
             walletId,
-            // Buy settlements always credit USDT at launch (ADR-0006).
-            // asset is now String (TEXT) — no Prisma enum import needed.
-            asset: 'USDT',
-            // amount is the credited USDT (new snapshot after credit).
+            // Multi-currency: credit the asset the buy actually delivered, from
+            // the threaded `asset` — not a hardcoded 'USDT' (mirrors the crypto
+            // ledger leg, which already keys by `asset`). asset is String (TEXT).
+            asset,
+            // amount is the credited crypto (new snapshot after credit).
             // In a real system this would be baseBalance + cryptoAmount;
             // for the settlement skeleton we record the credited amount
             // as the snapshot — a full balance sync (provider_sync) will
@@ -1288,6 +1331,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         const receiptNumber = formatReceiptNumber(year, seqResult[0].nextval);
 
         // WN-4: pass asset so the receipt shows the correct asset symbol.
+        // Multi-currency: pass fiatCurrency + a symbol-aware formatter so the
+        // receipt renders the correct currency code + symbol, not a hardcoded NGN.
         const { htmlContent, itemized } = buildReceiptContent({
           receiptNumber,
           transactionId,
@@ -1296,6 +1341,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           cryptoAmount,
           processingFee,
           asset,
+          fiatCurrency,
+          formatFiat: (amount) => this.assets.formatFiat(fiatCurrency, amount),
           issuedAt: now,
         });
 
@@ -1553,6 +1600,9 @@ export class SettlementPrismaRepository implements ISettlementRepository {
     return this.prisma.$transaction(
       async (tx) => {
         // ── 0. Advisory locks — serialize concurrent sell finalizations ────────
+        // Multi-currency: the fiat payout accounts are DERIVED from `fiatCurrency`
+        // so the lock covers the SAME accounts the ledger builder writes.
+        const fc = fiatCurrency.toLowerCase();
         await acquireAccountAdvisoryLocks(tx, [
           {
             accountType: 'clearing',
@@ -1564,19 +1614,22 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           },
           {
             accountType: 'treasury_reserve',
-            accountId: ACCOUNT_IDS.NGN_TREASURY,
+            accountId: `${fc}_treasury`,
           },
           {
             accountType: 'processor_settlement',
-            accountId: ACCOUNT_IDS.NGN_PAYOUT,
+            accountId: `${fc}_payout`,
           },
         ]);
 
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
+        // Multi-currency: pass fiatCurrency so the fiat payout leg states are read for
+        // the ${fc}-derived accounts (matching buildSellFinalizeEntries), not NGN.
         const accountStates = await fetchSellFinalizeAccountStates(
           tx as unknown as PrismaService,
           asset,
+          fiatCurrency,
         );
 
         // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
@@ -1644,6 +1697,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         );
 
         // WN-4: pass asset so the receipt shows the correct asset symbol.
+        // Multi-currency: pass fiatCurrency + a symbol-aware formatter so the
+        // payout renders in the correct currency, not a hardcoded NGN.
         const { htmlContent, itemized } = buildSellReceiptContent({
           receiptNumber,
           transactionId,
@@ -1651,6 +1706,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           cryptoAmount,
           netFiatAmount,
           asset,
+          fiatCurrency,
+          formatFiat: (amount) => this.assets.formatFiat(fiatCurrency, amount),
           issuedAt: now,
         });
 
@@ -1782,9 +1839,11 @@ export class SettlementPrismaRepository implements ISettlementRepository {
               originatingTransactionId: transactionId,
               userId,
               reason: CompensationReason.settlement_failed,
-              // The refund amount is the USDT that was reserved.
+              // The refund amount is the crypto that was reserved.
               amount: cryptoAmount as unknown as Prisma.Decimal,
-              currency: 'USDT',
+              // Multi-currency/asset: the refunded asset from input, not a
+              // hardcoded 'USDT' (mirrors settleSendRefundAtomic's `currency: asset`).
+              currency: asset,
               // status defaults to pending per the schema default.
             },
           });

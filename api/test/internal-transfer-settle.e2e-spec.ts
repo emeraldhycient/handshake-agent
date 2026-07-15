@@ -220,7 +220,7 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
     const velocityRepo = new VelocityPrismaRepository(ps);
     const walletRepo = new WalletPrismaRepository(ps);
     const complianceEventRepo = new ComplianceEventPrismaRepository(ps);
-    settlementRepo = new SettlementPrismaRepository(ps, config);
+    settlementRepo = new SettlementPrismaRepository(ps, config, assetRegistry);
 
     // MockSanctionsScreener with an empty denylist — every recipient passes.
     const sanctionsConfigStub = {

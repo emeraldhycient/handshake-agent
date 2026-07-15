@@ -127,9 +127,14 @@ export function buildTiers(
   })
 }
 
-/** Distinct fiat codes that have registered `limits.<code>.*` keys in the read (NGN first). */
+/**
+ * Distinct fiat codes that have registered `limits.<code>.*` keys in the read,
+ * with `defaultFiat` (the catalog's configured default — never a hardcoded
+ * 'NGN' literal) pinned first.
+ */
 export function availableCurrencies(
-  settings: readonly EffectiveSetting[]
+  settings: readonly EffectiveSetting[],
+  defaultFiat: string
 ): string[] {
   const codes = new Set<string>()
   for (const s of settings) {
@@ -137,7 +142,7 @@ export function availableCurrencies(
     if (m) codes.add(m[1])
   }
   return [...codes].sort((a, b) =>
-    a === "NGN" ? -1 : b === "NGN" ? 1 : a.localeCompare(b)
+    a === defaultFiat ? -1 : b === defaultFiat ? 1 : a.localeCompare(b)
   )
 }
 

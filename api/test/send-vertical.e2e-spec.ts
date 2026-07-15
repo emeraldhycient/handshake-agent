@@ -184,7 +184,7 @@ function buildSendExecutionService(
     new QuotePrismaRepository(ps),
     new TransactionPrismaRepository(ps),
     new SettlementOutboxPrismaRepository(ps),
-    new SettlementPrismaRepository(ps, config as never),
+    new SettlementPrismaRepository(ps, config as never, assetRegistry),
     quotesService,
     kycGate,
     new DirectiveService(
