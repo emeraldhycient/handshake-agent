@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { QRCodeSVG } from "qrcode.react"
 import { DepositNetworkWarning } from "@/components/shared/deposit-network-warning"
+import { CopyButton } from "@/components/shared/copy-button"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -119,9 +120,15 @@ export function WalletDepositPanel({
               <p className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
                 {ticker(selected.sub)} deposit · {depositData.network}
               </p>
-              <p className="mt-1.5 font-mono text-[13px] break-all text-foreground">
-                {depositData.address}
-              </p>
+              <div className="mt-1.5 flex items-start">
+                <p className="font-mono text-[13px] break-all text-foreground">
+                  {depositData.address}
+                </p>
+                <CopyButton
+                  value={depositData.address}
+                  label="deposit address"
+                />
+              </div>
               {sharedWith.length > 0 && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   This address is shared with{" "}

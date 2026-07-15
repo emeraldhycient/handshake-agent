@@ -322,7 +322,7 @@ describe('CloudApiSender', () => {
           cryptoAmount: '3.0625',
           fiatAmount: '5000',
           processingFeeAmount: '25.00',
-          totalFiat: '5025.00',
+          totalFiat: '5000',
           nonce: 'abc123nonce',
         },
       });
@@ -363,7 +363,7 @@ describe('CloudApiSender', () => {
                   cryptoAmount: '3.0625',
                   fiatAmount: '5000',
                   processingFeeAmount: '25.00',
-                  totalFiat: '5025.00',
+                  totalFiat: '5000',
                   nonce: 'abc123nonce',
                 },
               },

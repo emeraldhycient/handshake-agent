@@ -960,7 +960,7 @@ describe('WebChatService', () => {
       spreadBps: 50,
       processingFeeBps: 100,
       processingFeeAmount: '50.00',
-      totalFiat: '5050.00',
+      totalFiat: '5000',
       expiresAt: new Date().toISOString(),
     };
     fakeProposalService.createBuyProposal.mockResolvedValue({
@@ -1228,7 +1228,7 @@ describe('WebChatService', () => {
       spreadBps: 50,
       processingFeeBps: 100,
       processingFeeAmount: '50.00',
-      totalFiat: '5050.00',
+      totalFiat: '5000',
       expiresAt: new Date().toISOString(),
     };
     fakeProposalService.createBuyProposal.mockResolvedValue({
@@ -1268,7 +1268,7 @@ describe('WebChatService', () => {
       spreadBps: 50,
       processingFeeBps: 100,
       processingFeeAmount: '50.00',
-      totalFiat: '5050.00',
+      totalFiat: '5000',
       expiresAt: new Date().toISOString(),
     };
     fakeProposalService.createBuyProposal.mockResolvedValue({
@@ -2347,7 +2347,7 @@ describe('WebChatService', () => {
         spreadBps: 50,
         processingFeeBps: 100,
         processingFeeAmount: '50.00',
-        totalFiat: '5050.00',
+        totalFiat: '5000',
         expiresAt: new Date().toISOString(),
       };
       fakeProposalService.createBuyProposal.mockResolvedValue({

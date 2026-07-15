@@ -163,7 +163,7 @@ const fakeConfirmation: BuyProposalConfirmation = {
   spreadBps: 100,
   processingFeeBps: 50,
   processingFeeAmount: '25.00',
-  totalFiat: '5025.00',
+  totalFiat: '5000',
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
 };
 
