@@ -141,7 +141,9 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
 
         {tab === "wallet" && <WalletTab onQuickAction={handleQuickAction} />}
         {tab === "activity" && <ActivityTab />}
-        {tab === "settings" && <SettingsPanel density="mobile" />}
+        {tab === "settings" && (
+          <SettingsPanel density="mobile" onBack={() => setTab("chat")} />
+        )}
       </main>
 
       <MobileTabbar active={tab} onSelect={setTab} />

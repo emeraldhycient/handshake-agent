@@ -37,6 +37,8 @@ const profileResponse = {
   kycTier: "tier_1",
   fiatCurrency: "NGN",
   limits: null,
+  memberSince: "2026-07-01T00:00:00.000Z",
+  security: { score: 2, label: "fair" },
 }
 
 const session = {
