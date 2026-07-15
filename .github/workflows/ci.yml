@@ -110,4 +110,12 @@ jobs:
         # Docker is available on the ubuntu-latest runner, so @testcontainers/postgresql
         # provisions its own throwaway Postgres per suite — no GH service needed.
         # The suites self-provision required env via test/setup-e2e-env.ts.
-        run: pnpm --filter @handshake-agent/api test:e2e
+        #
+        # Memory: ~80 supertest suites each boot a Nest app + a throwaway Postgres.
+        # At Jest's default worker count the accumulated per-worker heap OOMs the
+        # runner ("JS heap out of memory", exit 134). Cap concurrency to 2 workers,
+        # give each worker a larger old-space, and recycle a worker once its heap
+        # crosses the idle limit so long-lived state is reclaimed between suites.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm --filter @handshake-agent/api test:e2e -- --maxWorkers=2 --workerIdleMemoryLimit=1500M
