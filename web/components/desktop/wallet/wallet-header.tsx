@@ -10,11 +10,11 @@ export function WalletHeader({ canSell, onQuickAction }: WalletHeaderProps) {
     : WALLET_ACTIONS.filter((a) => a.action !== "sell")
 
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <h1 className="text-[20px] font-extrabold tracking-tight text-foreground">
         Wallet
       </h1>
-      <div className="flex gap-[9px]">
+      <div className="flex flex-wrap gap-[9px]">
         {actions.map(({ action, label, primary }) => (
           <ActionButton
             key={action}

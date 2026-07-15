@@ -13,6 +13,7 @@ import { ApiError } from "@/lib/api/client"
 import { toErrorMessage } from "@/lib/error-message"
 import { cn } from "@/lib/utils"
 import { CopyButton } from "@/components/shared/copy-button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/hooks/use-toast"
 import { EditProfileDialog } from "./edit-profile-dialog"
 import { SectionCard, SettingRow, RowButton } from "./section-card"
@@ -34,9 +35,38 @@ export function AccountSection({ density }: SettingsSectionProps) {
   const [payIdDraft, setPayIdDraft] = useState("")
   const [payIdLocked, setPayIdLocked] = useState<string | null>(null)
 
-  if (!profile.data) return null
-  const p = profile.data
   const mobile = density === "mobile"
+
+  if (profile.isLoading) {
+    return (
+      <SectionCard label="Account" density={density}>
+        <div
+          className={cn(
+            "flex flex-col gap-2",
+            mobile ? "px-[15px] py-[14px]" : "px-[18px] py-4"
+          )}
+        >
+          <Skeleton className="h-10 w-full" />
+        </div>
+      </SectionCard>
+    )
+  }
+  if (profile.isError || !profile.data) {
+    return (
+      <SectionCard label="Account" density={density}>
+        <p
+          className={cn(
+            "text-[12.5px] text-danger",
+            mobile ? "px-[15px] py-[14px]" : "px-[18px] py-4"
+          )}
+          role="alert"
+        >
+          Could not load your account. Please refresh the page.
+        </p>
+      </SectionCard>
+    )
+  }
+  const p = profile.data
 
   async function commitNick() {
     const alias = normalizeHandle(nickDraft)
@@ -88,11 +118,7 @@ export function AccountSection({ density }: SettingsSectionProps) {
         icon={<UserIcon />}
         title="Name"
         subtitle={p.fullName ?? p.email.split("@")[0]}
-        trailing={
-          <RowButton density={density} onClick={() => setEditing(true)}>
-            Edit
-          </RowButton>
-        }
+        trailing={<RowButton onClick={() => setEditing(true)}>Edit</RowButton>}
       />
       <SettingRow
         density={density}
@@ -127,7 +153,7 @@ export function AccountSection({ density }: SettingsSectionProps) {
         }
         trailing={
           !payIdLocked && (
-            <RowButton density={density} onClick={() => setClaiming((v) => !v)}>
+            <RowButton onClick={() => setClaiming((v) => !v)}>
               {p.payId ? "Change" : mobile ? "Claim" : "Claim handle"}
             </RowButton>
           )
@@ -165,7 +191,7 @@ export function AccountSection({ density }: SettingsSectionProps) {
             : "Extra names friends can use to find you."
         }
         trailing={
-          <RowButton density={density} onClick={() => setAddingNick((v) => !v)}>
+          <RowButton onClick={() => setAddingNick((v) => !v)}>
             {mobile ? "Add" : "Add nickname"}
           </RowButton>
         }

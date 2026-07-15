@@ -46,9 +46,7 @@ export function SecuritySection({ density }: SettingsSectionProps) {
         title="Transaction PIN"
         subtitle="Required for every money movement"
         trailing={
-          <RowButton density={density} onClick={() => setChangingPin(true)}>
-            Change
-          </RowButton>
+          <RowButton onClick={() => setChangingPin(true)}>Change</RowButton>
         }
       />
 
@@ -168,7 +166,6 @@ function SessionRow({
       </div>
       {!session.isCurrent && (
         <DangerButton
-          density={density}
           onClick={() => onRevoke(session)}
           ariaLabel={`Revoke ${label} session`}
         >

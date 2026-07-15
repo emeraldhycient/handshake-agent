@@ -26,7 +26,7 @@ export function BalanceHero({
           className="mt-0.5 text-[40px] font-extrabold tracking-tight tabular-nums"
         />
       </div>
-      <div className="flex gap-[10px]">
+      <div className="flex flex-wrap gap-[10px]">
         {actions.map(({ action, label, primary }) => (
           <button
             key={action}

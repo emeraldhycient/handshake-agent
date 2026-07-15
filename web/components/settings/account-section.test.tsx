@@ -110,4 +110,21 @@ describe("AccountSection", () => {
       alias: "newnick",
     })
   })
+
+  it("renders a loading skeleton (not a silent blank) while the profile loads", () => {
+    profile.current = { isLoading: true }
+    render(<AccountSection density="desktop" />)
+    // the section chrome stays; the rows are replaced by a skeleton
+    expect(screen.getByText("Account")).toBeInTheDocument()
+    expect(screen.queryByText("olivia lee")).not.toBeInTheDocument()
+  })
+
+  it("surfaces an error branch (role=alert) when the profile query fails", () => {
+    profile.current = { isError: true, data: undefined }
+    render(<AccountSection density="desktop" />)
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /could not load your account/i
+    )
+    expect(screen.queryByText("olivia lee")).not.toBeInTheDocument()
+  })
 })

@@ -75,7 +75,7 @@ export function SettingRow({
       <div
         className={cn(
           "flex items-center",
-          mobile ? "flex-wrap gap-3" : "gap-[14px]"
+          mobile ? "flex-wrap gap-3" : "flex-wrap gap-x-[14px] gap-y-3"
         )}
       >
         <div
@@ -91,7 +91,9 @@ export function SettingRow({
         >
           {icon}
         </div>
-        <div className={cn("min-w-0 flex-1", mobile && "min-w-[130px]")}>
+        <div
+          className={cn("flex-1", mobile ? "min-w-[130px]" : "min-w-[150px]")}
+        >
           <div
             className={cn(
               "font-bold text-foreground",
@@ -180,12 +182,10 @@ export function PillSelect({
 export function DangerButton({
   children,
   onClick,
-  density,
   ariaLabel,
 }: {
   children: React.ReactNode
   onClick?: () => void
-  density: "desktop" | "mobile"
   ariaLabel?: string
 }) {
   return (
@@ -195,10 +195,7 @@ export function DangerButton({
       size="xl"
       onClick={onClick}
       aria-label={ariaLabel}
-      className={cn(
-        "min-w-[160px] flex-none",
-        density === "mobile" && "ml-auto"
-      )}
+      className={cn("ml-auto min-w-[160px] flex-none")}
     >
       {children}
     </Button>
@@ -212,12 +209,10 @@ export function DangerButton({
 export function RowButton({
   children,
   onClick,
-  density,
   className,
 }: {
   children: React.ReactNode
   onClick?: () => void
-  density: "desktop" | "mobile"
   className?: string
 }) {
   return (
@@ -226,11 +221,7 @@ export function RowButton({
       variant="outline"
       size="xl"
       onClick={onClick}
-      className={cn(
-        "min-w-[160px] flex-none",
-        density === "mobile" && "ml-auto",
-        className
-      )}
+      className={cn("ml-auto min-w-[160px] flex-none", className)}
     >
       {children}
     </Button>

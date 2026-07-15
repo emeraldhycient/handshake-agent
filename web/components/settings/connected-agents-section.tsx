@@ -90,7 +90,6 @@ export function ConnectedAgentsSection({ density }: SettingsSectionProps) {
             }
             trailing={
               <DangerButton
-                density={density}
                 onClick={() => handleDisconnect(token.id, token.label)}
                 ariaLabel={`Disconnect ${token.label}`}
               >

@@ -53,12 +53,8 @@ describe("row buttons", () => {
     const onDanger = vi.fn()
     render(
       <>
-        <RowButton density="desktop" onClick={onRow}>
-          Edit
-        </RowButton>
-        <DangerButton density="desktop" onClick={onDanger}>
-          Revoke
-        </DangerButton>
+        <RowButton onClick={onRow}>Edit</RowButton>
+        <DangerButton onClick={onDanger}>Revoke</DangerButton>
       </>
     )
     await userEvent.click(screen.getByRole("button", { name: "Edit" }))
