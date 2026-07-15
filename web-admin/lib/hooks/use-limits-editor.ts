@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react"
 
-import { useAdminMe, useCreateChange, useSettings } from "@/lib/query/hooks"
+import {
+  useAdminMe,
+  useCreateChange,
+  usePublicConfig,
+  useSettings,
+} from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
@@ -14,6 +19,7 @@ import {
   parseCap,
 } from "@/lib/limits/rows"
 import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
+import { DEFAULT_DISPLAY_FIAT } from "@/constants/currencies"
 import type { LimitEditLeaf, LimitTier, LimitTierId } from "@/types/components"
 
 /** The edit flow steps: value → reason → confirm (the raise is step-up-guarded server-side). */
@@ -42,16 +48,26 @@ export function useLimitsEditor() {
   const stepUp = useStepUpRetry()
 
   const settings = useMemo(() => query.data ?? [], [query.data])
-  const currencies = useMemo(() => availableCurrencies(settings), [settings])
+
+  // The catalog's configured default fiat (first enabled `/config` currency) —
+  // never a hardcoded 'NGN' literal (root CLAUDE.md §7). Falls back to
+  // DEFAULT_DISPLAY_FIAT only until `/config` has resolved.
+  const publicConfig = usePublicConfig()
+  const defaultFiat = publicConfig.data?.fiats[0]?.code ?? DEFAULT_DISPLAY_FIAT
+
+  const currencies = useMemo(
+    () => availableCurrencies(settings, defaultFiat),
+    [settings, defaultFiat]
+  )
   const settingsByKey = useMemo(
     () => new Map(settings.map((s) => [s.key, s])),
     [settings]
   )
 
-  const [currency, setCurrency] = useState("NGN")
+  const [currency, setCurrency] = useState(defaultFiat)
   const activeCurrency = currencies.includes(currency)
     ? currency
-    : (currencies[0] ?? "NGN")
+    : (currencies[0] ?? defaultFiat)
   const tiers = useMemo<LimitTier[]>(
     () => buildTiers(settings, activeCurrency),
     [settings, activeCurrency]

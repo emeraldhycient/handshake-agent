@@ -169,8 +169,14 @@ export function buildReadTools(deps: McpToolDeps): McpToolDefinition[] {
         "The effective buy and sell rate for one asset/fiat pair — each a single spread-inclusive number (what a buyer pays / a seller receives per unit). 'source' flags live-feed vs config floor. Read-only — no funds move.",
       scope: 'read',
       inputSchema: GetRateInputSchema,
+      // fiatCurrency is optional on the schema — default to the catalog base
+      // fiat when the caller omits it (multi-currency ergonomics, CLAUDE.md
+      // §7), mirroring the web/WhatsApp get_rate handling.
       handler: (args) =>
-        deps.rates.getEffectiveRate(args.asset, args.fiatCurrency),
+        deps.rates.getEffectiveRate(
+          args.asset,
+          args.fiatCurrency ?? deps.registry.defaultFiat(),
+        ),
     }),
 
     defineTool({

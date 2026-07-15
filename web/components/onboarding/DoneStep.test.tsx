@@ -7,11 +7,21 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
 }))
 
+const useConfig = vi.hoisted(() => vi.fn())
+vi.mock("@/lib/query/hooks", () => ({ useConfig: () => useConfig() }))
+
 import { DoneStep } from "./DoneStep"
 
 describe("DoneStep", () => {
   beforeEach(() => {
     push.mockClear()
+    useConfig.mockReturnValue({
+      data: {
+        fiats: [
+          { code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 },
+        ],
+      },
+    })
   })
 
   it("welcomes the user by first name and shows a zero balance", () => {
@@ -126,6 +136,41 @@ describe("DoneStep", () => {
     expect(
       screen.getByRole("button", { name: /verify now/i })
     ).not.toHaveAttribute("data-variant", "accent")
+  })
+
+  it("renders the CONFIG default fiat, not a hardcoded Naira/₦, when the first enabled fiat is non-default", () => {
+    useConfig.mockReturnValue({
+      data: {
+        fiats: [
+          { code: "USD", displayName: "US Dollar", symbol: "$", decimals: 2 },
+        ],
+      },
+    })
+    render(
+      <DoneStep
+        firstName="Ada"
+        kycStatus="verified"
+        skipped={false}
+        onVerifyNow={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/us dollar balance/i)).toBeInTheDocument()
+    expect(screen.getByText("$0.00")).toBeInTheDocument()
+    expect(screen.queryByText(/naira balance/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument()
+  })
+
+  it("the agent hint is an amount-free open prompt, not the hardcoded 'Buy ₦50,000 of USDT' demo label", () => {
+    render(
+      <DoneStep
+        firstName="Ada"
+        kycStatus="verified"
+        skipped={false}
+        onVerifyNow={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/i'd like to buy usdt/i)).toBeInTheDocument()
+    expect(screen.queryByText(/₦50,000/)).not.toBeInTheDocument()
   })
 
   it("shows an In review badge while KYC is pending", () => {

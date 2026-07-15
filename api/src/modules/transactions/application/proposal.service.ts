@@ -410,7 +410,17 @@ export class ProposalService {
   async createBuyProposal(
     input: CreateBuyProposalInput,
   ): Promise<CreateBuyProposalOutput> {
-    const { userId, conversationId, intent } = input;
+    const { userId, conversationId } = input;
+    // Single resolution point (multi-currency ergonomics, CLAUDE.md §7): the
+    // engine is the authoritative entry point for both the web and WhatsApp
+    // chat handlers, so it must not assume an upstream caller already
+    // resolved fiatCurrency — default to the catalog base fiat here when the
+    // intent omits it, mirroring the get_rate path.
+    const intent = {
+      ...input.intent,
+      fiatCurrency:
+        input.intent.fiatCurrency ?? this.assetRegistry.defaultFiat(),
+    };
     const now = this.clock.now();
 
     // 0. Amount-floor guard (findings #2/#3/#6) — BEFORE pricing and the KYC
@@ -528,7 +538,14 @@ export class ProposalService {
   async createSellProposal(
     input: CreateSellProposalInput,
   ): Promise<CreateSellProposalOutput> {
-    const { userId, conversationId, intent, beneficiaryId } = input;
+    const { userId, conversationId, beneficiaryId } = input;
+    // Single resolution point (multi-currency ergonomics, CLAUDE.md §7) — see
+    // the matching comment in createBuyProposal.
+    const intent = {
+      ...input.intent,
+      fiatCurrency:
+        input.intent.fiatCurrency ?? this.assetRegistry.defaultFiat(),
+    };
     const now = this.clock.now();
 
     // 0. Amount-floor guard (finding #4) — BEFORE quoting / balance / gate.
@@ -1238,31 +1255,10 @@ export class ProposalService {
       (isNegTo ? '-' : '') + wholeTo.toString() + fracToStr;
 
     // 7. KYC/velocity gate on the NGN-equivalent of fromAmount (§3.3).
-    // Use baseRate for the fromAsset.
-    const pricingConfig = this.configService.get<PricingConfig>('pricing');
-    const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate = resolveEffectiveBaseRate(
-      pricingConfig,
-      this.effectiveLiveStore(),
-      fromAsset,
-      baseFiat,
-      this.clock.now(),
-      this.feedStalenessSec(),
-    );
-    const LEDGER_SCALE = 10n ** 18n;
-    const scaledFrom = toScaled(amount);
-    const scaledNgn18 =
-      (scaledFrom * toScaled(String(baseRate))) / LEDGER_SCALE;
-    const isNegNgn = scaledNgn18 < 0n;
-    const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;
-    const wholeNgn = absNgn / LEDGER_SCALE;
-    const fracNgn = absNgn % LEDGER_SCALE;
-    const fracNgnStr =
-      fracNgn === 0n
-        ? ''
-        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
-    const ngnEquivalentStr =
-      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
+    // Use baseRate for the fromAsset. Same BigInt-exact computation as the send
+    // + internal-transfer paths — shared via the one helper (§13.2, no drift).
+    const { baseFiat, ngnEquivalent: ngnEquivalentStr } =
+      this.resolveGateFiatEquivalent(fromAsset, amount);
 
     await this.kycGate.assertCanTransact({
       userId,

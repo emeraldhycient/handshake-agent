@@ -23,12 +23,12 @@ describe('QuoteBuyInputSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('defaults fiatCurrency to NGN when omitted', () => {
+  it('accepts a buy-quote input with no fiat (calling layer defaults it)', () => {
     const parsed = QuoteBuyInputSchema.parse({
       asset: 'USDT',
       fiatAmount: '50000',
     })
-    expect(parsed.fiatCurrency).toBe('NGN')
+    expect(parsed.fiatCurrency).toBeUndefined()
   })
 
   it('accepts a fiatAmount with two decimal places', () => {

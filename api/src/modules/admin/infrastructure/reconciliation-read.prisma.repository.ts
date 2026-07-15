@@ -37,6 +37,7 @@ import {
   CompensationStatus,
   SettlementOutboxStatus,
 } from '../../../../generated/prisma/client';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   IReconciliationReadRepository,
@@ -72,7 +73,10 @@ const BREAK_KIND_BY_REASON: Partial<
 
 @Injectable()
 export class ReconciliationReadPrismaRepository implements IReconciliationReadRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly assetRegistry: AssetRegistry,
+  ) {}
 
   async listBreaks(staleAfterSec: number): Promise<ReconBreakRecord[]> {
     const [compensations, stuckSettlements] = await Promise.all([
@@ -174,7 +178,13 @@ export class ReconciliationReadPrismaRepository implements IReconciliationReadRe
 
     return rows.map((row) => {
       const meta = asRecord(row.transaction?.metadata);
-      const asset = str(meta.asset) ?? 'NGN';
+      // Degrade through the record's own currency fields first (crypto asset,
+      // then fiat currency) before falling back to the catalog's configured
+      // default — never a hardcoded literal (§7).
+      const asset =
+        str(meta.asset) ??
+        str(meta.fiatCurrency) ??
+        this.assetRegistry.defaultFiat();
       const amount = str(meta.amount) ?? str(meta.fiatAmount) ?? '0';
       return {
         id: row.id,

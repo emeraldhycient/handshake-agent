@@ -98,6 +98,16 @@ import { ExecuteProposalDto } from './dto/proposal.dto';
 // Inflow transaction types — used to derive `direction` when not already in metadata.
 const INFLOW_TYPES = new Set(['buy', 'deposit', 'receive', 'reward', 'refund']);
 
+/**
+ * Per-viewer flow direction: prefer an explicit metadata snapshot (internal
+ * transfers write `direction` per row — 'out' on the sender's, 'in' on the
+ * recipient's), fall back to the type heuristic for every legacy/other row.
+ */
+function directionOf(metaDirection: unknown, type: string): 'in' | 'out' {
+  if (metaDirection === 'in' || metaDirection === 'out') return metaDirection;
+  return INFLOW_TYPES.has(type) ? 'in' : 'out';
+}
+
 // The executable proposal statuses (must match the engine's own check).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
@@ -421,6 +431,38 @@ export class TransactionStatusController {
     private readonly settlementRepo: ISettlementRepository,
   ) {}
 
+  /**
+   * Per-viewer flow projection for a Transaction row: direction + counterparty
+   * label, derived from `metadata` + `type`. Shared by `list` and `getStatus`
+   * so the two read surfaces can never drift out of lockstep (previously two
+   * near-identical copies, kept in sync only by a comment).
+   *
+   * Direction: prefers an explicit metadata snapshot (internal transfers write
+   * `direction` per row — 'out' on the sender's, 'in' on the recipient's),
+   * falls back to the type heuristic for every legacy/other row.
+   *
+   * Counterparty precedence: destination (send) → counterparty (legacy field,
+   * not written by the current settlement path — kept defensively) →
+   * senderAddress (deposit) → recipientHandle (internal_transfer sender row)
+   * → senderHandle (internal_transfer recipient row — "from @A").
+   */
+  private deriveCounterpartyProjection(
+    meta: Record<string, unknown>,
+    type: string,
+  ): { direction: 'in' | 'out'; counterparty: string | undefined } {
+    const str = (k: string): string | undefined =>
+      typeof meta[k] === 'string' ? meta[k] : undefined;
+    return {
+      direction: directionOf(meta.direction, type),
+      counterparty:
+        str('destination') ??
+        str('counterparty') ??
+        str('senderAddress') ??
+        str('recipientHandle') ??
+        str('senderHandle'),
+    };
+  }
+
   @Get()
   async list(
     @CurrentUser() user: AuthenticatedUser,
@@ -439,17 +481,19 @@ export class TransactionStatusController {
       const meta = t.metadata;
       const str = (k: string) =>
         typeof meta[k] === 'string' ? meta[k] : undefined;
-      const counterparty =
-        str('destination') ??
-        str('counterparty') ??
-        str('senderAddress') ??
-        str('recipientHandle');
+      // Direction + counterparty: kept in lockstep with getStatus (+ the MCP
+      // surface) via the shared private helper — see its doc comment.
+      const { direction, counterparty } = this.deriveCounterpartyProjection(
+        meta,
+        t.type,
+      );
       // Deposits store the amount under `amount`; trades use `cryptoAmount`.
       const cryptoAmt = str('cryptoAmount') ?? str('amount');
       return {
         id: t.id,
         type: t.type,
         status: t.status,
+        direction,
         ...(str('asset') ? { asset: str('asset') } : {}),
         ...(cryptoAmt ? { cryptoAmount: cryptoAmt } : {}),
         ...(str('fiatAmount') ? { fiatAmount: str('fiatAmount') } : {}),
@@ -498,22 +542,13 @@ export class TransactionStatusController {
       receiptNumber = found ?? undefined;
     }
 
-    // Derive direction: prefer an explicit metadata flag, fall back to type heuristic.
-    const direction: 'in' | 'out' = INFLOW_TYPES.has(transaction.type)
-      ? 'in'
-      : 'out';
-
-    // Counterparty: prefer destination (send), then senderAddress (deposit),
-    // then recipientHandle (internal transfer — no address/destination to show).
-    // Kept in lockstep with the list projection above + the MCP surface.
-    const counterparty =
-      typeof meta.destination === 'string'
-        ? meta.destination
-        : typeof meta.senderAddress === 'string'
-          ? meta.senderAddress
-          : typeof meta.recipientHandle === 'string'
-            ? meta.recipientHandle
-            : undefined;
+    // Direction + counterparty: kept in lockstep with the list projection
+    // above (+ the MCP surface) via the shared private helper — see its doc
+    // comment.
+    const { direction, counterparty } = this.deriveCounterpartyProjection(
+      meta,
+      transaction.type,
+    );
 
     // On-chain fields — present for deposits (from Blockradar webhook) and sends.
     const txHash = typeof meta.txHash === 'string' ? meta.txHash : undefined;

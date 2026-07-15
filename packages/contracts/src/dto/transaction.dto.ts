@@ -9,6 +9,10 @@ export const TransactionListItemSchema = z.object({
   fiatAmount: z.string().optional(),
   fiatCurrency: z.string().optional(),
   counterparty: z.string().optional(),
+  // Per-viewer flow direction. Snapshotted onto the Transaction metadata at
+  // settle (internal transfers carry a sender row `out` + a recipient row `in`);
+  // the serving projection falls back to a type heuristic when it is absent.
+  direction: z.enum(["in", "out"]).optional(),
   createdAt: z.string(),
 });
 export type TransactionListItem = z.infer<typeof TransactionListItemSchema>;

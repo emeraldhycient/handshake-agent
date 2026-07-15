@@ -19,13 +19,13 @@ describe('SellCryptoIntentSchema', () => {
     expect(result.fiatCurrency).toBe('NGN')
   })
 
-  it('defaults fiatCurrency to NGN when omitted', () => {
+  it('accepts a sell_crypto intent with no fiat (calling layer defaults it)', () => {
     const result = SellCryptoIntentSchema.parse({
       action: 'sell_crypto',
       asset: 'USDT',
       cryptoAmount: '1.5',
     })
-    expect(result.fiatCurrency).toBe('NGN')
+    expect(result.fiatCurrency).toBeUndefined()
   })
 
   it('rejects an unknown asset', () => {

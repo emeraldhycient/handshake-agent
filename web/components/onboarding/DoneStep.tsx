@@ -3,8 +3,11 @@
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { StatusPill } from "@/components/shared/status-pill"
-import { formatFiat } from "@/lib/format"
+import { actionPrompt } from "@/lib/chat/flow"
+import { fiatSymbolFor, formatFiat } from "@/lib/format"
+import { useConfig } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
+import { DEFAULT_DISPLAY_FIAT } from "@/constants/onboarding"
 import type { DoneStepProps } from "@/types"
 import type { StatusTone } from "@/lib/schemas"
 
@@ -34,12 +37,21 @@ export function DoneStep({
   onVerifyNow,
 }: DoneStepProps) {
   const router = useRouter()
+  const config = useConfig()
   const badge = statusBadge(kycStatus)
   const subcopy = skipped
     ? "Your wallet is live. Add money and explore — verify whenever you're ready to send."
     : kycStatus === "verified"
       ? "You're fully verified. Send, receive, swap and cash out — all from a chat."
       : "We're reviewing your verification — you'll get a notification once it's done."
+
+  // The platform's configured default fiat (the first enabled currency in
+  // `/config`) — never a hardcoded ₦/Naira literal (root CLAUDE.md §7). Falls
+  // back to DEFAULT_DISPLAY_FIAT only until `/config` has resolved.
+  const defaultFiat = config.data?.fiats[0]
+  const fiatCode = defaultFiat?.code ?? DEFAULT_DISPLAY_FIAT
+  const fiatSymbol = defaultFiat?.symbol ?? fiatSymbolFor(fiatCode)
+  const fiatDisplayName = defaultFiat?.displayName ?? "Naira"
 
   return (
     <div className="flex min-h-svh flex-col lg:min-h-0 lg:gap-6">
@@ -85,15 +97,15 @@ export function DoneStep({
         <div className="flex items-center gap-[14px] rounded-[18px] border border-border bg-card p-[18px] lg:gap-[15px] lg:p-5">
           <div className="flex h-12 w-12 flex-none items-center justify-center rounded-[14px] bg-gradient-to-br from-primary to-primary-deep lg:h-[50px] lg:w-[50px]">
             <span className="font-mono text-xl font-extrabold text-accent">
-              ₦
+              {fiatSymbol}
             </span>
           </div>
           <div className="flex-1">
             <p className="text-[12.5px] font-semibold text-muted-foreground">
-              Naira balance
+              {fiatDisplayName} balance
             </p>
             <p className="text-[22px] font-extrabold text-foreground tabular-nums lg:text-[23px]">
-              {formatFiat(0, "NGN")}
+              {formatFiat(0, fiatCode)}
             </p>
           </div>
           <StatusPill tone={badge.tone}>{badge.label}</StatusPill>
@@ -139,7 +151,7 @@ export function DoneStep({
               Your agent is ready
             </p>
             <p className="text-[13px] text-muted-foreground">
-              Just say &ldquo;Buy ₦50,000 of USDT&rdquo; to begin.
+              Just say &ldquo;{actionPrompt("buy")}&rdquo; to begin.
             </p>
           </div>
         </div>

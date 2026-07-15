@@ -550,6 +550,7 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
       enabled: true,
     })),
     defaultCryptoAsset: jest.fn(() => 'USDT'),
+    defaultFiat: jest.fn(() => 'NGN'),
     defaultNetworkFor: jest.fn(() => 'TRON'),
     formatCrypto: jest.fn(
       (symbol: string, amount: string) => `${amount} ${symbol}`,
@@ -1139,6 +1140,37 @@ describe('ConversationService.handleInbound', () => {
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('not supported');
     expect(proposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  it('swap intent, capability disabled → "not supported" reply names the CONFIG default fiat, not a hardcoded NGN', async () => {
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const assetRegistry = makeAssetRegistry();
+    assetRegistry.isCapabilityEnabled.mockReturnValueOnce(false);
+    (assetRegistry.defaultFiat as jest.Mock).mockReturnValue('USD');
+    (assetRegistry.fiat as jest.Mock).mockImplementation((code: string) => ({
+      code,
+      displayName: code === 'USD' ? 'US Dollar' : code,
+      symbol: code === 'USD' ? '$' : code,
+      decimals: 2,
+      enabled: true,
+    }));
+    const proposalService = makeProposalService();
+    const { svc, sender } = buildService({
+      agentPort,
+      assetRegistry,
+      proposalService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('US Dollar');
+    expect(sentText).not.toContain('Naira');
   });
 
   // ── swap, capability live, verified user → proposal + flow/text confirmation ──
@@ -2524,6 +2556,55 @@ describe('ConversationService.handleInbound', () => {
     expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
     const sentText = captureFirstSentText(sender);
     expect(sentText).toMatch(/GHS|not available|settle/i);
+  });
+
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('buy_crypto with NO fiatCurrency in the intent → resolves to AssetRegistry.defaultFiat(), still runs the liveness gate, and reaches a proposal', async () => {
+    const assetRegistry = makeAssetRegistry();
+    const proposalOut = stubBuyProposalOutput();
+    const { svc, proposalService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        // fiatCurrency deliberately omitted.
+      }),
+      proposalService: makeProposalService(proposalOut),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(assetRegistry.defaultFiat).toHaveBeenCalled();
+    expect(assetRegistry.isCurrencyLive).toHaveBeenCalledWith('NGN');
+    const [buyCallArg] = proposalService.createBuyProposal.mock.calls[0] as [
+      { intent: { fiatCurrency?: string } },
+    ];
+    expect(buyCallArg.intent.fiatCurrency).toBe('NGN');
+  });
+
+  it('sell_crypto with NO fiatCurrency in the intent → resolves to AssetRegistry.defaultFiat(), still runs the liveness gate, and reaches a proposal', async () => {
+    const assetRegistry = makeAssetRegistry();
+    const { svc, proposalService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        // fiatCurrency deliberately omitted.
+      }),
+      beneficiaryService: makeBeneficiaryService(stubBankBeneficiary()),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(assetRegistry.defaultFiat).toHaveBeenCalled();
+    expect(assetRegistry.isCurrencyLive).toHaveBeenCalledWith('NGN');
+    const [sellCallArg] = proposalService.createSellProposal.mock.calls[0] as [
+      { intent: { fiatCurrency?: string } },
+    ];
+    expect(sellCallArg.intent.fiatCurrency).toBe('NGN');
   });
 
   // ── query_transactions (linked user) → text list + download CTA ────────────

@@ -42,6 +42,7 @@ import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { IdentityService } from '../../identity/application/identity.service';
+import { HandleService } from '../../identity/application/handle.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import type { WithdrawOutput } from '../../wallets/application/ports/wallet-provider.port';
@@ -155,6 +156,12 @@ export interface SettleBuyResult {
    * the user's notification address without an additional DB lookup.
    */
   userId?: string;
+  /**
+   * The crypto asset symbol credited. Set only when status === 'completed' —
+   * receipt rendering must resolve its display name from the registry, never
+   * a hardcoded literal.
+   */
+  assetSymbol?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +240,8 @@ export interface SettleSendOnChainResult {
   status: 'completed' | 'failed' | 'pending';
   receiptNumber?: string;
   userId?: string;
+  /** The crypto asset symbol settled — receipt rendering must never hardcode it. */
+  assetSymbol?: string;
 }
 
 /**
@@ -407,6 +416,12 @@ export class ExecutionService {
     // execution re-quote uses the SAME live rate the proposal did (no drift).
     @Optional()
     private readonly liveRateStore?: LiveRateStore,
+    // @Optional so the existing unit suite (positional construction) resolves
+    // without it. Production injects it (IdentityModule exports HandleService) so
+    // executeInternalTransfer can audit-snapshot the SENDER's @handle onto the
+    // recipient-side Transaction row — a read-only identity lookup (§3.1).
+    @Optional()
+    private readonly handleService?: HandleService,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
@@ -702,10 +717,14 @@ export class ExecutionService {
     // ── Step 2: Idempotent path — already completed ─────────────────────────
     if (txn.status === 'completed') {
       const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      const idempotentMeta = txn.metadata as Record<string, string>;
+      const idempotentAsset =
+        idempotentMeta.asset ?? this.assetRegistry.defaultCryptoAsset();
       return {
         transactionId: txn.id,
         status: 'completed',
         userId: txn.userId,
+        assetSymbol: idempotentAsset,
         ...(receiptNumber !== null ? { receiptNumber } : {}),
       };
     }
@@ -779,6 +798,7 @@ export class ExecutionService {
       transactionId: txn.id,
       status: 'completed',
       userId: txn.userId,
+      assetSymbol: settleAsset,
       receiptNumber,
     };
   }
@@ -2000,6 +2020,25 @@ export class ExecutionService {
     });
     const year = now.getFullYear().toString();
 
+    // Snapshot the SENDER's own @handle for the recipient-side row's "from @A"
+    // counterparty. Read-only identity lookup (§3.1), formatted `@handle` to
+    // mirror how the recipient handle is stored (web-chat resolves `@${handle}`).
+    // Best-effort: a sender with no claimed handle yields no counterparty rather
+    // than blocking the money move.
+    let senderHandle: string | undefined;
+    let senderDisplayName: string | undefined;
+    if (this.handleService !== undefined) {
+      try {
+        const own = await this.handleService.findOwnHandle(userId);
+        if (own !== null) {
+          senderHandle = `@${own.handle}`;
+          senderDisplayName = own.displayName;
+        }
+      } catch {
+        // display-only; never block the transfer
+      }
+    }
+
     const result = await this.settlementRepo.settleInternalTransferAtomic({
       proposalId,
       senderUserId: userId,
@@ -2010,6 +2049,8 @@ export class ExecutionService {
       cryptoAmount,
       recipientHandle,
       recipientDisplayName,
+      senderHandle,
+      senderDisplayName,
       assetDecimals: assetMeta.decimals,
       idempotencyKey,
       requestChecksum,
@@ -2117,10 +2158,14 @@ export class ExecutionService {
     // ── Step 2: Idempotent path ──────────────────────────────────────────────
     if (txn.status === 'completed') {
       const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      const idempotentMeta = txn.metadata as Record<string, string>;
+      const idempotentAsset =
+        idempotentMeta.asset ?? this.assetRegistry.defaultCryptoAsset();
       return {
         transactionId: txn.id,
         status: 'completed',
         userId: txn.userId,
+        assetSymbol: idempotentAsset,
         ...(receiptNumber !== null ? { receiptNumber } : {}),
       };
     }
@@ -2170,6 +2215,7 @@ export class ExecutionService {
         transactionId: txn.id,
         status: 'completed',
         userId: txn.userId,
+        assetSymbol: sendAsset,
         receiptNumber,
       };
     }
@@ -2197,6 +2243,7 @@ export class ExecutionService {
       transactionId: txn.id,
       status: 'failed',
       userId: txn.userId,
+      assetSymbol: sendAsset,
     };
   }
 

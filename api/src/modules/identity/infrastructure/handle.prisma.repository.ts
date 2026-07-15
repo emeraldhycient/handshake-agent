@@ -51,6 +51,33 @@ export class HandlePrismaRepository implements IHandleRepository {
     return rows.length > 0 ? this.toOwner(rows[0]) : null;
   }
 
+  /**
+   * The user's own handle by internal id: their PayID via COALESCE, falling back
+   * to their earliest public nickname. One round-trip; the correlated sub-select
+   * only runs for the (rare) payId-less user. Returns null when both are absent
+   * (COALESCE → NULL). `userId` is cast to uuid to match the `users.id` column.
+   */
+  async findHandleByUserId(userId: string): Promise<HandleOwnerRecord | null> {
+    const rows = await this.prisma.$queryRaw<
+      Array<HandleOwnerRow & { handle: string | null }>
+    >`
+      SELECT u."id",
+             COALESCE(u."payId", (
+               SELECT a."alias" FROM "public_aliases" a
+               WHERE a."userId" = u."id"
+               ORDER BY a."createdAt" ASC
+               LIMIT 1
+             )) AS "handle",
+             k."firstName", k."lastName"
+      FROM "users" u
+      LEFT JOIN "kyc_profiles" k ON k."userId" = u."id"
+      WHERE u."id" = ${userId}::uuid
+      LIMIT 1
+    `;
+    if (rows.length === 0 || rows[0].handle === null) return null;
+    return this.toOwner({ ...rows[0], handle: rows[0].handle });
+  }
+
   async findAliasOwner(handleLower: string): Promise<HandleOwnerRecord | null> {
     const rows = await this.prisma.$queryRaw<HandleOwnerRow[]>`
       SELECT u."id", a."alias" AS "handle", k."firstName", k."lastName"

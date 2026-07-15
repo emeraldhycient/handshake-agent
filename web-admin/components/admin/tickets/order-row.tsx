@@ -1,6 +1,7 @@
 import { StatusPill } from "@/components/admin/status-pill"
 import { EM_DASH } from "@/constants/tickets"
-import { formatNgn, orderPillStatus } from "@/lib/tickets/orders"
+import { formatFiat } from "@/lib/format"
+import { orderPillStatus } from "@/lib/tickets/orders"
 import type { OrderRowProps } from "@/types/components"
 
 /** One recent-order row — ticket type / id · user · amount · status. Read-only display. */
@@ -20,7 +21,7 @@ export function OrderRow({ order }: OrderRowProps) {
         {order.userId}
       </div>
       <div className="text-right font-mono text-[12px] font-bold text-ink tabular-nums">
-        {formatNgn(order.totalAmount)}
+        {formatFiat(order.totalAmount, order.currency)}
       </div>
       <div className="text-right">
         <StatusPill status={status} stuck={status === "pending_settlement"} />

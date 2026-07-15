@@ -247,6 +247,9 @@ function makeFakes(overrides: FakeOverrides = {}) {
     network: jest.fn((id: string) => ({ id })),
     defaultNetworkFor: jest.fn().mockReturnValue('tron'),
     publicView: jest.fn().mockReturnValue(PUBLIC_VIEW),
+    // get_rate defaults an omitted fiatCurrency to this (multi-currency
+    // ergonomics, CLAUDE.md §7) — see the get_rate defaulting tests below.
+    defaultFiat: jest.fn().mockReturnValue('NGN'),
   };
   return {
     profile,
@@ -493,14 +496,16 @@ describe('McpToolsService — read tools', () => {
     await close();
   });
 
-  it('quote_buy validates args through the shared contract schema (fiatCurrency defaulted)', async () => {
+  it('quote_buy validates args through the shared contract schema (fiatCurrency omitted → left to QuotesService to default)', async () => {
     const fakes = makeFakes();
     const { client, close } = await connect(makeService(fakes), ['read']);
     await callTool(client, 'quote_buy', { asset: 'USDT', fiatAmount: '5000' });
+    // fiatCurrency is optional on the shared contract schema (multi-currency
+    // ergonomics, CLAUDE.md §7); the MCP dispatch passes args straight
+    // through — QuotesService (not this mock) resolves the catalog default.
     expect(fakes.quotes.quoteBuy).toHaveBeenCalledWith({
       asset: 'USDT',
       fiatAmount: '5000',
-      fiatCurrency: 'NGN',
     });
     const invalid = await callTool(client, 'quote_buy', {
       asset: 'NOPE',
@@ -518,21 +523,37 @@ describe('McpToolsService — read tools', () => {
       asset: 'USDT',
       cryptoAmount: '2.5',
     });
+    // fiatCurrency omitted here too — QuotesService resolves the default.
     expect(fakes.quotes.quoteSell).toHaveBeenCalledWith({
       asset: 'USDT',
       cryptoAmount: '2.5',
-      fiatCurrency: 'NGN',
     });
     await close();
   });
 
-  it('get_rate returns the folded buy+sell rate for a pair (fiatCurrency defaulted to NGN)', async () => {
+  it('get_rate returns the folded buy+sell rate for a pair (fiatCurrency omitted → AssetRegistry.defaultFiat())', async () => {
     const fakes = makeFakes();
     const { client, close } = await connect(makeService(fakes), ['read']);
     const result = await callTool(client, 'get_rate', { asset: 'USDT' });
     expect(payloadOf(result)).toEqual(EFFECTIVE_RATE);
-    // Default applied by the shared contract schema — mirrors quote_buy.
+    // fiatCurrency is optional on the shared contract schema; the tool
+    // handler resolves the catalog default (multi-currency ergonomics,
+    // CLAUDE.md §7) — mirrors the web/WhatsApp get_rate handling.
     expect(fakes.rates.getEffectiveRate).toHaveBeenCalledWith('USDT', 'NGN');
+    expect(fakes.registry.defaultFiat).toHaveBeenCalled();
+    await close();
+  });
+
+  it('get_rate uses the given fiatCurrency (unchanged) without consulting AssetRegistry.defaultFiat()', async () => {
+    const fakes = makeFakes();
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'get_rate', {
+      asset: 'USDT',
+      fiatCurrency: 'GHS',
+    });
+    expect(payloadOf(result)).toEqual(EFFECTIVE_RATE);
+    expect(fakes.rates.getEffectiveRate).toHaveBeenCalledWith('USDT', 'GHS');
+    expect(fakes.registry.defaultFiat).not.toHaveBeenCalled();
     await close();
   });
 
@@ -674,6 +695,39 @@ describe('McpToolsService — transaction tools', () => {
       type: 'internal_transfer',
       direction: 'out',
       counterparty: '@ada',
+    });
+    await close();
+  });
+
+  it('get_transaction surfaces the senderHandle counterparty + direction=in for a recipient internal_transfer row', async () => {
+    // The RECIPIENT-side row snapshots direction:'in' and the SENDER's @handle.
+    // The projection must honour the per-row direction and show "from @A".
+    const fakes = makeFakes();
+    fakes.transactionRepo.findById.mockResolvedValue({
+      id: TX_ID,
+      userId: USER_ID,
+      type: 'internal_transfer',
+      status: 'completed',
+      metadata: {
+        asset: 'USDT',
+        cryptoAmount: '3.00',
+        direction: 'in',
+        role: 'recipient',
+        senderUserId: 'sender-user-1',
+        senderHandle: '@sam.pay',
+      },
+      createdAt: new Date('2026-07-15T10:00:00Z'),
+    });
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'get_transaction', {
+      transactionId: TX_ID,
+    });
+    const payload = payloadOf(result);
+    expect(payload).toMatchObject({
+      id: TX_ID,
+      type: 'internal_transfer',
+      direction: 'in',
+      counterparty: '@sam.pay',
     });
     await close();
   });

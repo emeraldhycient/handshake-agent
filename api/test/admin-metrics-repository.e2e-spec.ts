@@ -239,6 +239,40 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
       expect(result.series).toEqual([]);
       expect(result.successRate).toBe(0);
     });
+
+    it('counts an internal transfer once (not twice) in byType + daily series — the recipient row shares metadata.direction:"in"', async () => {
+      const sender = await seedUser();
+      const recipient = await seedUser();
+      const at = new Date('2026-06-05T08:00:00.000Z');
+      // Sender-owned anchor row (direction 'out') and the recipient-owned mirror
+      // row (direction 'in') both represent ONE transfer — the aggregate count
+      // must exclude the recipient row so a single transfer contributes 1, not 2.
+      await seedTxn({
+        userId: sender,
+        type: 'internal_transfer',
+        status: 'completed',
+        createdAt: at,
+        metadata: { direction: 'out' },
+      });
+      await seedTxn({
+        userId: recipient,
+        type: 'internal_transfer',
+        status: 'completed',
+        createdAt: at,
+        metadata: { direction: 'in' },
+      });
+
+      const result = await repo.transactionVolume(FROM, TO);
+
+      const transfer = result.byType.find(
+        (t) => t.type === 'internal_transfer',
+      )!;
+      expect(transfer.count).toBe(1);
+      expect(transfer.completed).toBe(1);
+
+      const day = result.series.find((b) => b.date === '2026-06-05')!;
+      expect(day.count).toBe(1);
+    });
   });
 
   // ── revenue ────────────────────────────────────────────────────────────────
@@ -315,6 +349,29 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
       expect(result.totalSpreadByCurrency).toEqual([]);
       expect(result.totalProfitByCurrency).toEqual([]);
       expect(result.txnCount).toBe(0);
+    });
+
+    it('does not double-count an internal transfer pair in txnCount (recipient row excluded)', async () => {
+      const sender = await seedUser();
+      const recipient = await seedUser();
+      const at = new Date('2026-06-06T08:00:00.000Z');
+      await seedTxn({
+        userId: sender,
+        type: 'internal_transfer',
+        status: 'completed',
+        createdAt: at,
+        metadata: { direction: 'out' },
+      });
+      await seedTxn({
+        userId: recipient,
+        type: 'internal_transfer',
+        status: 'completed',
+        createdAt: at,
+        metadata: { direction: 'in' },
+      });
+
+      const result = await repo.revenue(FROM, TO);
+      expect(result.txnCount).toBe(1);
     });
   });
 

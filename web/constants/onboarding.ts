@@ -48,3 +48,11 @@ export function getOnboardingStageIndex(step: OnboardingStep): number {
   }
   return -1
 }
+
+/**
+ * The fiat DoneStep's balance card shows before `/config` has resolved (the
+ * offline/code-defaults fallback — mirrors `DEFAULT_BANK_CURRENCY` in
+ * `constants/beneficiaries.ts`). The live source of truth is always the first
+ * enabled fiat in the `/config` catalog; this is never rendered once config loads.
+ */
+export const DEFAULT_DISPLAY_FIAT = "NGN"

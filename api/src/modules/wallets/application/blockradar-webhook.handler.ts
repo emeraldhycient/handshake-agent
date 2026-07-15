@@ -363,18 +363,24 @@ export class BlockradarWebhookHandler implements WebhookHandler {
     status: 'completed' | 'failed' | 'pending';
     transactionId: string;
     receiptNumber?: string;
+    assetSymbol?: string;
   }): string {
+    const assetDisplayName = result.assetSymbol
+      ? this.assetRegistry.asset(result.assetSymbol).displayName
+      : this.assetRegistry.asset(this.assetRegistry.defaultCryptoAsset())
+          .displayName;
+
     if (result.status === 'completed') {
       const ref = result.receiptNumber ?? result.transactionId;
       return (
         `✅ Your crypto send is complete!\n` +
         `Receipt: ${ref}\n` +
-        `Your USDT has been sent on-chain. Reply "balance" to check your balance.`
+        `Your ${assetDisplayName} has been sent on-chain. Reply "balance" to check your balance.`
       );
     }
     return (
       `⚠️ Send failed\n` +
-      `Your USDT has been refunded to your Handshake wallet. ` +
+      `Your ${assetDisplayName} has been refunded to your Handshake wallet. ` +
       `Reply "balance" to check your balance.`
     );
   }

@@ -107,6 +107,7 @@ function makeSettlementRepo(
 
 function makeExecutionService(
   settleSendResult: 'completed' | 'failed' | 'pending' | 'throw' = 'completed',
+  settleSendAssetSymbol: string = ASSET_SYMBOL,
 ): jest.Mocked<Pick<ExecutionService, 'settleSendOnChain' | 'settleSwap'>> {
   const settleSwap = jest
     .fn()
@@ -125,6 +126,7 @@ function makeExecutionService(
         transactionId: TXN_ID,
         status: 'failed',
         userId: USER_ID,
+        assetSymbol: settleSendAssetSymbol,
       }),
       settleSwap,
     };
@@ -143,6 +145,7 @@ function makeExecutionService(
       status: 'completed',
       receiptNumber: RECEIPT_NUMBER,
       userId: USER_ID,
+      assetSymbol: settleSendAssetSymbol,
     }),
     settleSwap,
   };
@@ -153,6 +156,7 @@ function makeHandler(
     wallet?: WalletRecord | null;
     settleResult?: 'deposited' | 'duplicate' | 'throw' | 'receipt-not-signable';
     settleSendResult?: 'completed' | 'failed' | 'pending' | 'throw';
+    settleSendAssetSymbol?: string;
     waAddress?: string | null;
     assetEnabled?: boolean;
     senderThrows?: boolean;
@@ -181,10 +185,16 @@ function makeHandler(
   if (overrides.senderThrows) {
     sender.sendText.mockRejectedValue(new Error('whatsapp send boom'));
   }
+  const assetDisplayNames: Record<string, string> = {
+    [ASSET_SYMBOL]: 'USDT',
+    USDC: 'USD Coin',
+  };
   const assetRegistry = {
-    asset: jest
-      .fn()
-      .mockReturnValue({ symbol: ASSET_SYMBOL, displayName: 'USDT' }),
+    asset: jest.fn().mockImplementation((symbol: string) => ({
+      symbol,
+      displayName: assetDisplayNames[symbol] ?? symbol,
+    })),
+    defaultCryptoAsset: jest.fn().mockReturnValue(ASSET_SYMBOL),
     network: jest.fn().mockReturnValue({ displayName: 'TRON (TRC-20)' }),
     formatCrypto: jest
       .fn()
@@ -193,6 +203,7 @@ function makeHandler(
   };
   const executionService = makeExecutionService(
     overrides.settleSendResult ?? 'completed',
+    overrides.settleSendAssetSymbol ?? ASSET_SYMBOL,
   );
 
   const handler = new BlockradarWebhookHandler(
@@ -430,6 +441,37 @@ describe('BlockradarWebhookHandler', () => {
       const { handler, sender } = makeHandler({ settleSendResult: 'pending' });
       await handler.handle(makeEvent(withdrawBody('withdraw.success')));
       expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    it('withdraw.success renders the settled asset display name, not a hardcoded literal', async () => {
+      const { handler, sender } = makeHandler({
+        settleSendAssetSymbol: 'USDC',
+      });
+      await handler.handle(makeEvent(withdrawBody('withdraw.success')));
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('USD Coin'),
+      );
+      expect(sender.sendText).not.toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('Your USDT'),
+      );
+    });
+
+    it('withdraw.failed renders the settled asset display name, not a hardcoded literal', async () => {
+      const { handler, sender } = makeHandler({
+        settleSendResult: 'failed',
+        settleSendAssetSymbol: 'USDC',
+      });
+      await handler.handle(makeEvent(withdrawBody('withdraw.failed')));
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('USD Coin'),
+      );
+      expect(sender.sendText).not.toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('Your USDT'),
+      );
     });
 
     it('swap.success → settleSwap(success:true, toAmount, hash)', async () => {

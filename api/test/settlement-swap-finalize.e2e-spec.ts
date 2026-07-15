@@ -31,9 +31,21 @@ import { PrismaClient } from '../generated/prisma/client';
 import { startTestPostgres } from './helpers/pg-testcontainer';
 
 import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
 import { hmacHex } from '../src/core/crypto/hmac';
+import configuration from '../src/core/config/configuration';
 
 import type { PrismaService } from '../src/core/prisma/prisma.service';
+
+/**
+ * Minimal catalog-bearing config source for the AssetRegistry the settlement
+ * repo now requires. Swap settlement renders no fiat amounts, so the registry is
+ * never dereferenced here — it only needs to construct (its ctor reads `catalog`).
+ */
+const catalogConfigSource = {
+  get: <T>(key: string): T | undefined =>
+    key === 'catalog' ? (configuration().catalog as unknown as T) : undefined,
+};
 
 jest.setTimeout(300_000);
 
@@ -64,7 +76,11 @@ describe('SettlementPrismaRepository.settleSwapFinalizeAtomic (integration, Test
     ({ prisma, stop } = await startTestPostgres());
 
     const ps = prisma as unknown as PrismaService;
-    repo = new SettlementPrismaRepository(ps, new StubConfigService() as never);
+    repo = new SettlementPrismaRepository(
+      ps,
+      new StubConfigService() as never,
+      new AssetRegistry(catalogConfigSource),
+    );
 
     const user = await prisma.user.create({
       data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },

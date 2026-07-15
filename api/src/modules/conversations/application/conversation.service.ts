@@ -667,11 +667,13 @@ export class ConversationService implements IInboundHandler {
 
     // Currency liveness gate: emit a graceful reply for supported-but-not-live fiats
     // (e.g. GHS, RWF). Never build a proposal for a non-live currency (§3.1 — no fake quote).
-    const buyFiatCurrency = (intent as { fiatCurrency?: string }).fiatCurrency;
-    if (
-      buyFiatCurrency &&
-      !this.assetRegistry.isCurrencyLive(buyFiatCurrency)
-    ) {
+    // Single resolution point (multi-currency ergonomics, CLAUDE.md §7):
+    // default to the catalog base fiat when the model omitted it, so this
+    // gate runs even for an unspecified currency instead of silently skipping it.
+    const buyFiatCurrency =
+      (intent as { fiatCurrency?: string }).fiatCurrency ??
+      this.assetRegistry.defaultFiat();
+    if (!this.assetRegistry.isCurrencyLive(buyFiatCurrency)) {
       return {
         replyText: `We settle in NGN for now — ${buyFiatCurrency} isn't available yet.`,
         flowSent: false,
@@ -683,10 +685,14 @@ export class ConversationService implements IInboundHandler {
       await this.proposalService.createBuyProposal({
         userId: guard.user.id,
         conversationId: conversation.id,
-        // The intent object is passed through; ProposalService validates it (§3.3).
-        intent: intent as Parameters<
-          ProposalService['createBuyProposal']
-        >[0]['intent'],
+        // The intent object is passed through (with fiatCurrency resolved
+        // above); ProposalService validates it (§3.3).
+        intent: {
+          ...(intent as Parameters<
+            ProposalService['createBuyProposal']
+          >[0]['intent']),
+          fiatCurrency: buyFiatCurrency,
+        },
       });
 
     return this.sendBuyConfirmation({
@@ -735,11 +741,13 @@ export class ConversationService implements IInboundHandler {
 
     // Currency liveness gate: emit a graceful reply for supported-but-not-live fiats.
     // Must come BEFORE the beneficiary lookup — never reach that for a non-live currency.
-    const sellFiatCurrency = (intent as { fiatCurrency?: string }).fiatCurrency;
-    if (
-      sellFiatCurrency &&
-      !this.assetRegistry.isCurrencyLive(sellFiatCurrency)
-    ) {
+    // Single resolution point (multi-currency ergonomics, CLAUDE.md §7):
+    // default to the catalog base fiat when the model omitted it, so this
+    // gate runs even for an unspecified currency instead of silently skipping it.
+    const sellFiatCurrency =
+      (intent as { fiatCurrency?: string }).fiatCurrency ??
+      this.assetRegistry.defaultFiat();
+    if (!this.assetRegistry.isCurrencyLive(sellFiatCurrency)) {
       return {
         replyText: `We settle in NGN for now — ${sellFiatCurrency} isn't available yet.`,
         flowSent: false,
@@ -755,9 +763,9 @@ export class ConversationService implements IInboundHandler {
       type: 'bank_account',
       recipientNickname: (intent as { recipientNickname?: string })
         .recipientNickname,
-      // Wave G: thread the sell fiat currency so an add-bank Flow collects a
-      // bank in the right currency (country derived server-side at the Flow
-      // endpoint). Undefined → the Flow endpoint defaults to the base fiat.
+      // Wave G: thread the sell fiat currency (already resolved above) so an
+      // add-bank Flow collects a bank in the right currency (country derived
+      // server-side at the Flow endpoint).
       currency: sellFiatCurrency,
       noBeneficiaryRetryText:
         'Please add a bank account to sell crypto. Once added, send your sell request again.',
@@ -778,9 +786,14 @@ export class ConversationService implements IInboundHandler {
       const out = await this.proposalService.createSellProposal({
         userId: user.id,
         conversationId: conversation.id,
-        intent: intent as Parameters<
-          ProposalService['createSellProposal']
-        >[0]['intent'],
+        // The intent object is passed through (with fiatCurrency resolved
+        // above); ProposalService validates it (§3.3).
+        intent: {
+          ...(intent as Parameters<
+            ProposalService['createSellProposal']
+          >[0]['intent']),
+          fiatCurrency: sellFiatCurrency,
+        },
         beneficiaryId: sellResolution.beneficiaryId,
       });
       proposalId = out.proposalId;
@@ -1709,8 +1722,12 @@ export class ConversationService implements IInboundHandler {
     // The supported set grows via config (§7); this fallback covers deferred actions.
     // `action` is logged in the future; for now build a generic reply from registry.
     void action; // acknowledged — surface it in a future logging enhancement
-    const defaultAsset = this.assetRegistry.asset('USDT').displayName;
-    const defaultFiat = this.assetRegistry.fiat('NGN').displayName;
+    const defaultAsset = this.assetRegistry.asset(
+      this.assetRegistry.defaultCryptoAsset(),
+    ).displayName;
+    const defaultFiat = this.assetRegistry.fiat(
+      this.assetRegistry.defaultFiat(),
+    ).displayName;
     return `That's not supported yet — you can buy ${defaultAsset} with ${defaultFiat}.`;
   }
 }

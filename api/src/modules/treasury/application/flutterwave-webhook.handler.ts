@@ -15,6 +15,7 @@
  */
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { ExecutionService } from '../../transactions/application/execution.service';
 import { IdentityService } from '../../identity/application/identity.service';
 import {
@@ -47,6 +48,7 @@ export class FlutterwaveWebhookHandler implements WebhookHandler {
     private readonly identityService: IdentityService,
     @Inject(WHATSAPP_SENDER)
     private readonly sender: IWhatsAppSender,
+    private readonly assetRegistry: AssetRegistry,
   ) {}
 
   async handle(event: WebhookEventRecord): Promise<void> {
@@ -179,6 +181,7 @@ export class FlutterwaveWebhookHandler implements WebhookHandler {
       result.transactionId,
       result.userId,
       result.receiptNumber,
+      result.assetSymbol,
     );
   }
 
@@ -202,6 +205,7 @@ export class FlutterwaveWebhookHandler implements WebhookHandler {
     transactionId: string,
     userId: string | undefined,
     receiptNumber: string | undefined,
+    assetSymbol?: string,
   ): Promise<void> {
     if (!userId) {
       this.logger.warn(
@@ -221,7 +225,7 @@ export class FlutterwaveWebhookHandler implements WebhookHandler {
       }
       await this.sender.sendText(
         waAddress,
-        this.buildReceiptText(receiptNumber, transactionId),
+        this.buildReceiptText(receiptNumber, transactionId, assetSymbol),
       );
     } catch (err: unknown) {
       this.logger.error(
@@ -234,12 +238,16 @@ export class FlutterwaveWebhookHandler implements WebhookHandler {
   private buildReceiptText(
     receiptNumber: string | undefined,
     transactionId: string,
+    assetSymbol?: string,
   ): string {
     const ref = receiptNumber ?? transactionId;
+    const assetDisplayName = this.assetRegistry.asset(
+      assetSymbol ?? this.assetRegistry.defaultCryptoAsset(),
+    ).displayName;
     return (
       `✅ Your crypto purchase is complete!\n` +
       `Receipt: ${ref}\n` +
-      `Your USDT has been credited to your Handshake wallet. ` +
+      `Your ${assetDisplayName} has been credited to your Handshake wallet. ` +
       `Reply "balance" to check your balance.`
     );
   }
