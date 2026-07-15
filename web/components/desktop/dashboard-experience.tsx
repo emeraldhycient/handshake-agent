@@ -86,7 +86,7 @@ export function DashboardExperience() {
       case "tickets":
         return <TicketsPage onQuickAction={handleQuickAction} />
       case "settings":
-        return <SettingsPage />
+        return <SettingsPage onAsk={() => setDPage("overview")} />
     }
   }
 

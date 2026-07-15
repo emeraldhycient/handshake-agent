@@ -11,9 +11,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { NativeSelect } from "@/components/ui/native-select"
 import { FormField } from "@/components/shared/form-field"
+import { useMe } from "@/lib/query/auth"
 import { useUpdateProfile } from "@/lib/query/profile"
+import { useSetName } from "@/lib/query/kyc-onboarding"
 import {
   EditProfileFormSchema,
   toUpdateProfileRequest,
@@ -22,55 +23,68 @@ import {
 import { toErrorMessage } from "@/lib/error-message"
 import type { EditProfileDialogProps } from "@/types"
 
+/** Tiers at which the KYC name is locked (server 409s on a name change). */
+const NAME_LOCKED_TIERS = ["tier_2", "tier_3"]
+
 /**
- * Edit the two self-service profile fields: contact phone + display currency.
- * KYC-owned identity (name, DOB, ID numbers) is immutable here by design
- * (§3.4) — the PATCH body is a strict contracts schema that rejects them.
+ * Edit the self-service profile fields: the KYC name (only before verification —
+ * it locks at tier_2+) and the contact phone. Name goes through the dedicated
+ * POST /profile/name endpoint; phone through the strict PATCH /profile body.
+ * Display currency lives in Preferences. Email is never editable here.
  */
 export function EditProfileDialog({
   open,
   onOpenChange,
   profile,
-  fiats,
 }: EditProfileDialogProps) {
+  const me = useMe()
   const update = useUpdateProfile()
+  const setName = useSetName()
+
+  const nameEditable = !NAME_LOCKED_TIERS.includes(profile.kycTier)
+  const firstName0 = me.data?.firstName ?? ""
+  const lastName0 = me.data?.lastName ?? ""
+
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<EditProfileFormValues>({
     resolver: zodResolver(EditProfileFormSchema),
-    values: { phone: profile.phone ?? "", fiatCurrency: profile.fiatCurrency },
+    values: {
+      firstName: firstName0,
+      lastName: lastName0,
+      phone: profile.phone ?? "",
+    },
   })
 
-  // The /config list drives the options; the server re-validates against the
-  // live catalog (§3.3). Keep the current value selectable even if /config is
-  // still loading so the form never silently switches currency.
-  const currencyOptions = fiats.some((f) => f.code === profile.fiatCurrency)
-    ? fiats
-    : [
-        {
-          code: profile.fiatCurrency,
-          displayName: profile.fiatCurrency,
-          symbol: "",
-          decimals: 2,
-        },
-        ...fiats,
-      ]
-
   async function onSubmit(values: EditProfileFormValues) {
-    const body = toUpdateProfileRequest(values, profile)
-    if (!body) {
-      onOpenChange(false)
-      return
-    }
     try {
-      await update.mutateAsync(body)
+      if (nameEditable) {
+        const firstName = values.firstName.trim()
+        const lastName = values.lastName.trim()
+        if (
+          firstName &&
+          lastName &&
+          (firstName !== firstName0 || lastName !== lastName0)
+        ) {
+          await setName.mutateAsync({ firstName, lastName })
+        }
+      }
+      const body = toUpdateProfileRequest(values, profile)
+      if (body) await update.mutateAsync(body)
       onOpenChange(false)
     } catch {
-      // Surfaced via update.error below — never silently dropped.
+      // Surfaced via the error line below — never silently dropped.
     }
   }
+
+  const errorMessage = update.isError
+    ? toErrorMessage(update.error)
+    : setName.isError
+      ? toErrorMessage(setName.error)
+      : null
+  const pending = update.isPending || setName.isPending
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -78,8 +92,9 @@ export function EditProfileDialog({
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
           <DialogDescription>
-            Update your contact phone and display currency. Identity details
-            are verified through KYC and can&apos;t be changed here.
+            {nameEditable
+              ? "Update your name and contact phone. Your name locks once your identity is verified."
+              : "Update your contact phone. Your name is locked after identity verification and can't be changed here."}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -87,6 +102,26 @@ export function EditProfileDialog({
           className="flex flex-col gap-4"
           noValidate
         >
+          <div className="grid grid-cols-2 gap-3">
+            <FormField
+              id="profile-first-name"
+              label="First name"
+              placeholder="First name"
+              autoComplete="given-name"
+              disabled={!nameEditable}
+              error={errors.firstName?.message}
+              {...register("firstName")}
+            />
+            <FormField
+              id="profile-last-name"
+              label="Last name"
+              placeholder="Last name"
+              autoComplete="family-name"
+              disabled={!nameEditable}
+              error={errors.lastName?.message}
+              {...register("lastName")}
+            />
+          </div>
           <FormField
             id="profile-phone"
             label="Phone number"
@@ -96,32 +131,9 @@ export function EditProfileDialog({
             error={errors.phone?.message}
             {...register("phone")}
           />
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="profile-fiat"
-              className="text-sm font-medium text-foreground"
-            >
-              Display currency
-            </label>
-            <NativeSelect id="profile-fiat" {...register("fiatCurrency")}>
-              {currencyOptions.map((f) => (
-                <option key={f.code} value={f.code}>
-                  {f.code}
-                  {f.displayName && f.displayName !== f.code
-                    ? ` — ${f.displayName}`
-                    : ""}
-                </option>
-              ))}
-            </NativeSelect>
-            {errors.fiatCurrency?.message && (
-              <p role="alert" className="text-xs text-destructive">
-                {errors.fiatCurrency.message}
-              </p>
-            )}
-          </div>
-          {update.isError && (
+          {errorMessage && (
             <p className="text-[12.5px] text-danger" role="alert">
-              {toErrorMessage(update.error)}
+              {errorMessage}
             </p>
           )}
           <DialogFooter>
@@ -129,12 +141,12 @@ export function EditProfileDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              disabled={update.isPending}
+              disabled={pending}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={update.isPending}>
-              {update.isPending ? "Saving…" : "Save changes"}
+            <Button type="submit" disabled={pending}>
+              {pending ? "Saving…" : "Save changes"}
             </Button>
           </DialogFooter>
         </form>

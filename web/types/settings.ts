@@ -14,13 +14,14 @@ export interface SettingsPanelProps {
   className?: string
   /** Mobile app-bar back action (provided by the mobile shell). */
   onBack?: () => void
+  /** "Ask the agent" — routes to the agent surface (desktop overview / mobile chat). */
+  onAsk?: () => void
 }
 
 export interface EditProfileDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   profile: ProfileResponse
-  fiats: PublicFiatOption[]
 }
 
 export interface ChangePinDialogProps {

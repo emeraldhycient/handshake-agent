@@ -3,7 +3,6 @@
 import { useState } from "react"
 import { normalizeHandle } from "@handshake-agent/contracts"
 import { useProfile } from "@/lib/query/auth"
-import { useConfig } from "@/lib/query/hooks"
 import {
   useChangePayId,
   useCreatePublicNickname,
@@ -22,7 +21,6 @@ import type { SettingsSectionProps } from "@/types"
 
 export function AccountSection({ density }: SettingsSectionProps) {
   const profile = useProfile()
-  const config = useConfig()
   const nicknames = usePublicNicknames()
   const createNick = useCreatePublicNickname()
   const deleteNick = useDeletePublicNickname()
@@ -101,11 +99,6 @@ export function AccountSection({ density }: SettingsSectionProps) {
         icon={<EmailIcon />}
         title="Email"
         subtitle={p.email}
-        trailing={
-          <RowButton density={density} onClick={() => setEditing(true)}>
-            Edit
-          </RowButton>
-        }
       />
       <SettingRow
         density={density}
@@ -227,12 +220,7 @@ export function AccountSection({ density }: SettingsSectionProps) {
           </>
         }
       />
-      <EditProfileDialog
-        open={editing}
-        onOpenChange={setEditing}
-        profile={p}
-        fiats={config.data?.fiats ?? []}
-      />
+      <EditProfileDialog open={editing} onOpenChange={setEditing} profile={p} />
     </SectionCard>
   )
 }

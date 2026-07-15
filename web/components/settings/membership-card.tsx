@@ -372,10 +372,15 @@ function TierRing({ tierNum, mobile }: { tierNum: number; mobile: boolean }) {
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
+      <div
+        className={cn(
+          "absolute inset-0 flex flex-col items-center justify-center",
+          mobile ? "gap-[3px]" : "gap-0.5"
+        )}
+      >
         <span
           className={cn(
-            "font-semibold tracking-[0.1em] text-membership-sage/60 uppercase",
+            "leading-none font-semibold tracking-[0.1em] text-membership-sage/60 uppercase",
             mobile ? "text-[9px]" : "text-[10px]"
           )}
         >
@@ -384,14 +389,14 @@ function TierRing({ tierNum, mobile }: { tierNum: number; mobile: boolean }) {
         <span
           className={cn(
             "leading-none font-extrabold",
-            mobile ? "text-[22px]" : "text-[28px]"
+            mobile ? "text-[21px]" : "text-[28px]"
           )}
         >
           {tierNum}
         </span>
         <span
           className={cn(
-            "text-membership-sage/[.55]",
+            "leading-none text-membership-sage/[.55]",
             mobile ? "text-[9px]" : "text-[10px]"
           )}
         >
