@@ -153,7 +153,8 @@ export function WalletDepositPanel({
         </div>
 
         <Button
-          className="flex-none rounded-[11px] bg-foreground font-bold text-background hover:opacity-90"
+          size="xl"
+          className="flex-none bg-foreground font-bold text-background hover:opacity-90"
           onClick={() => onQuickAction("receive", chipLabel("receive"))}
         >
           Show QR in chat
