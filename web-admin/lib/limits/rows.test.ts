@@ -87,8 +87,12 @@ describe("buildTiers + availableCurrencies", () => {
     // The global new-beneficiary hold appears on every tier card.
     expect(tiers[0].velocity.at(-1)?.v).toBe("1d")
   })
-  it("lists currencies with NGN first", () => {
-    expect(availableCurrencies(settings)).toEqual(["NGN", "GHS"])
+  it("lists currencies with the given default fiat first", () => {
+    expect(availableCurrencies(settings, "NGN")).toEqual(["NGN", "GHS"])
+  })
+
+  it("pins a NON-default catalog fiat first, not a hardcoded NGN", () => {
+    expect(availableCurrencies(settings, "GHS")).toEqual(["GHS", "NGN"])
   })
 })
 

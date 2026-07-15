@@ -12,7 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { ChangeRequest, EffectiveSetting } from "@handshake-agent/contracts"
+import type {
+  ChangeRequest,
+  EffectiveSetting,
+} from "@handshake-agent/contracts"
 
 import { LimitsPage } from "@/components/admin/limits-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
@@ -22,6 +25,7 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
   setSetting: vi.fn(),
+  getPublicConfig: vi.fn(),
 }))
 
 // The four-eyes maker-checker raise (POST /admin/approvals).
@@ -34,7 +38,11 @@ vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
 }))
 
-import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import {
+  getPublicConfig,
+  listEffectiveSettings,
+  setSetting,
+} from "@/lib/api/config"
 import { createChange } from "@/lib/api/approvals"
 import { getMe } from "@/lib/api/admin"
 
@@ -42,14 +50,11 @@ const mockList = vi.mocked(listEffectiveSettings)
 const mockSet = vi.mocked(setSetting)
 const mockCreate = vi.mocked(createChange)
 const mockGetMe = vi.mocked(getMe)
+const mockGetPublicConfig = vi.mocked(getPublicConfig)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
-function limit(
-  key: string,
-  value: number,
-  category = "KYC"
-): EffectiveSetting {
+function limit(key: string, value: number, category = "KYC"): EffectiveSetting {
   return {
     key,
     category,
@@ -138,6 +143,15 @@ beforeEach(() => {
     menus: [],
     pages: [],
   })
+  mockGetPublicConfig.mockReset()
+  mockGetPublicConfig.mockResolvedValue({
+    fiats: [
+      { code: "NGN", displayName: "Nigerian Naira", symbol: "₦", decimals: 2 },
+    ],
+    assets: [],
+    networks: [],
+    capabilities: {},
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -205,7 +219,9 @@ describe("LimitsPage (four-eyes tier_override)", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Edit Daily max · rolling 24h" })
+      await screen.findByRole("button", {
+        name: "Edit Daily max · rolling 24h",
+      })
     )
     const input = screen.getByRole("textbox", { name: "New value (NGN)" })
     await user.clear(input)

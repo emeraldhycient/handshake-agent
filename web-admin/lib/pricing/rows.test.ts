@@ -85,14 +85,30 @@ describe("buildSpreadRows", () => {
 })
 
 describe("pricingCurrencies", () => {
-  it("collects base-rate codes with NGN first, defaults to NGN when none", () => {
+  it("collects base-rate codes with the given default fiat first, defaults to it when none priced", () => {
     expect(
-      pricingCurrencies([
-        s("pricing.assets.USDT.baseRates.GHS", 19),
-        s("pricing.assets.USDT.baseRates.NGN", 1375),
-      ])
+      pricingCurrencies(
+        [
+          s("pricing.assets.USDT.baseRates.GHS", 19),
+          s("pricing.assets.USDT.baseRates.NGN", 1375),
+        ],
+        "NGN"
+      )
     ).toEqual(["NGN", "GHS"])
-    expect(pricingCurrencies([])).toEqual(["NGN"])
+    expect(pricingCurrencies([], "NGN")).toEqual(["NGN"])
+  })
+
+  it("pins a NON-default catalog fiat first, not a hardcoded NGN", () => {
+    expect(
+      pricingCurrencies(
+        [
+          s("pricing.assets.USDT.baseRates.NGN", 1375),
+          s("pricing.assets.USDT.baseRates.USD", 1),
+        ],
+        "USD"
+      )
+    ).toEqual(["USD", "NGN"])
+    expect(pricingCurrencies([], "USD")).toEqual(["USD"])
   })
 })
 
