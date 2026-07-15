@@ -5356,4 +5356,29 @@ describe('ExecutionService.executeInternalTransfer', () => {
     ).rejects.toBeInstanceOf(ProposalExpiredError);
     expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
   });
+
+  it('sender-handle lookup throws → transfer still settles, senderHandle omitted (display-only, must never block a money move)', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const handleService = {
+      findOwnHandle: jest.fn().mockRejectedValue(new Error('identity down')),
+    };
+
+    const svc = buildInternalTransferService({
+      settlementRepo,
+      handleService,
+    });
+
+    const result = await svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(settlementRepo.settleInternalTransferAtomic).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(settlementRepo.settleInternalTransferAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderHandle: undefined,
+        senderDisplayName: undefined,
+      }),
+    );
+  });
 });

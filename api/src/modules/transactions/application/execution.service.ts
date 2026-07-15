@@ -2015,10 +2015,14 @@ export class ExecutionService {
     let senderHandle: string | undefined;
     let senderDisplayName: string | undefined;
     if (this.handleService !== undefined) {
-      const own = await this.handleService.findOwnHandle(userId);
-      if (own !== null) {
-        senderHandle = `@${own.handle}`;
-        senderDisplayName = own.displayName;
+      try {
+        const own = await this.handleService.findOwnHandle(userId);
+        if (own !== null) {
+          senderHandle = `@${own.handle}`;
+          senderDisplayName = own.displayName;
+        }
+      } catch {
+        // display-only; never block the transfer
       }
     }
 
