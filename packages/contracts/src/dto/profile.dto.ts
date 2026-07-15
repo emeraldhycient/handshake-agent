@@ -6,8 +6,25 @@ export const ProfileLimitsSchema = z.object({
   perTxFiatMax: z.number(),
   dailyFiatMax: z.number(),
   dailyTxCountMax: z.number(),
+  /**
+   * Live daily-window usage for the membership card (read-only display).
+   * Sourced from the same VelocityCounter the money-gate reads — the fixed
+   * 24h window used/used-count. Present only when limits apply (verified tier).
+   */
+  dailyFiatUsed: z.number(),
+  dailyTxCountUsed: z.number(),
 });
 export type ProfileLimits = z.infer<typeof ProfileLimitsSchema>;
+
+/**
+ * Membership security-strength summary (0..4) derived from real account
+ * signals: PIN set, email verified, device bound, KYC ≥ tier_2.
+ */
+export const MembershipSecuritySchema = z.object({
+  score: z.number().int().min(0).max(4),
+  label: z.enum(["weak", "fair", "good", "strong"]),
+});
+export type MembershipSecurity = z.infer<typeof MembershipSecuritySchema>;
 
 export const ProfileResponseSchema = z.object({
   email: z.string().email(),
@@ -19,6 +36,10 @@ export const ProfileResponseSchema = z.object({
   limits: ProfileLimitsSchema.nullable(),
   /** PayId handle for @-mention sends (Spec 2). Present when claimed. */
   payId: z.string().optional(),
+  /** ISO account-creation timestamp ("member since"); null if unavailable. */
+  memberSince: z.string().nullable(),
+  /** Security-strength summary for the membership card. */
+  security: MembershipSecuritySchema,
 });
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 
