@@ -183,23 +183,6 @@ function computeProcessingFee(
 }
 
 /**
- * Adds two decimal amount strings (both 2dp) and returns a 2dp string.
- * Uses BigInt arithmetic to avoid float drift.
- */
-function addFiatStrings(a: string, b: string): string {
-  const toMinor = (s: string): bigint => {
-    const [whole = '0', frac = ''] = s.split('.');
-    const fracPadded = frac.slice(0, 2).padEnd(2, '0');
-    return BigInt(whole) * 100n + BigInt(fracPadded);
-  };
-
-  const sum = toMinor(a) + toMinor(b);
-  const whole = sum / 100n;
-  const frac = sum % 100n;
-  return `${whole}.${String(frac).padStart(2, '0')}`;
-}
-
-/**
  * Computes the SHA-256 hex digest of the canonical JSON of the parameters object.
  * Key ordering is deterministic (sorted alphabetically) so the checksum is stable.
  * NOTE: the key-sort is shallow and assumes a flat parameters object; nested
@@ -443,12 +426,16 @@ export class ProposalService {
       fiatCurrency: intent.fiatCurrency,
     });
 
-    // 2. Compute processingFeeAmount and totalFiat (BigInt-safe strings).
+    // 2. Compute processingFeeAmount. The fee is DEDUCTED from fiatAmount — the
+    // engine buys crypto with netFiat = fiatAmount − fee (see computeBuyQuote),
+    // and the pay-in transfer + the settlement receipt both charge fiatAmount.
+    // So "total charged" IS fiatAmount; adding the fee on top would double-count
+    // a fee already inside it (the pay-in would then disagree with the quote).
     const processingFeeAmount = computeProcessingFee(
       intent.fiatAmount,
       quote.processingFeeBps,
     );
-    const totalFiat = addFiatStrings(intent.fiatAmount, processingFeeAmount);
+    const totalFiat = intent.fiatAmount;
 
     // 3. Persist the Quote snapshot.
     const expiresAt = new Date(now.getTime() + quote.expiresInSec * 1000);

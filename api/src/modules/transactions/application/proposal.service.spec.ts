@@ -370,11 +370,13 @@ describe('ProposalService.createBuyProposal', () => {
     expect(result.confirmation.processingFeeAmount).toBe('50.00');
   });
 
-  it('totalFiat = fiatAmount + processingFeeAmount (string)', async () => {
-    // 10000 + 50.00 = 10050.00
+  it('totalFiat = fiatAmount (the fee is deducted from it, not added on top)', async () => {
+    // The engine buys crypto with netFiat = fiatAmount − fee and the pay-in +
+    // receipt both charge fiatAmount, so "total charged" IS fiatAmount (10000).
+    // Adding the fee (→ 10050.00) would overstate what the user actually pays.
     const svc = makeBuySvc();
     const result = await svc.createBuyProposal(BASE_INPUT);
-    expect(result.confirmation.totalFiat).toBe('10050.00');
+    expect(result.confirmation.totalFiat).toBe('10000');
   });
 
   it('expiresAt is now + expiresInSec as an ISO datetime string', async () => {
