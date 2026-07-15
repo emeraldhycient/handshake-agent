@@ -13,6 +13,7 @@
   --animate-hs-spark-spin: hsSparkSpin 3s linear infinite;
   --animate-hs-spark-breathe: hsSparkBreathe 2.2s ease-in-out infinite;
   --animate-hs-shake: hsShake 0.4s;
+  --animate-hs-toast: hsToastIn 0.22s ease both;
   --font-heading: var(--font-sans);
   --font-sans: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -64,6 +65,35 @@
   --color-danger-foreground: var(--danger-foreground);
   --color-danger-muted: var(--danger-muted);
   --color-primary-mid: var(--primary-mid);
+  /* Settings redesign — section greys + membership-card palette (exact design hex
+     lives once in :root below; components reference these utilities, never raw hex). */
+  --color-settings-soft: var(--settings-soft);
+  --color-settings-faint: var(--settings-faint);
+  --color-settings-ink: var(--settings-ink);
+  --color-settings-ink-strong: var(--settings-ink-strong);
+  --color-settings-label: var(--settings-label);
+  --color-settings-btn-text: var(--settings-btn-text);
+  --color-settings-btn-border: var(--settings-btn-border);
+  --color-settings-btn-hover: var(--settings-btn-hover);
+  --color-settings-line: var(--settings-line);
+  --color-settings-hairline: var(--settings-hairline);
+  --color-settings-hairline-soft: var(--settings-hairline-soft);
+  --color-settings-chip-border: var(--settings-chip-border);
+  --color-settings-outline: var(--settings-outline);
+  --color-settings-code-bg: var(--settings-code-bg);
+  --color-settings-code-border: var(--settings-code-border);
+  --color-settings-danger: var(--settings-danger);
+  --color-settings-danger-border: var(--settings-danger-border);
+  --color-settings-danger-bg: var(--settings-danger-bg);
+  --color-settings-danger-hover: var(--settings-danger-hover);
+  --color-settings-dark-hover: var(--settings-dark-hover);
+  --color-settings-info: var(--settings-info);
+  --color-settings-info-bg: var(--settings-info-bg);
+  --color-membership-sage: var(--membership-sage);
+  --color-membership-mint: var(--membership-mint);
+  --color-membership-mint-soft: var(--membership-mint-soft);
+  --color-membership-mint-dim: var(--membership-mint-dim);
+  --color-membership-mint-icon: var(--membership-mint-icon);
   --shadow-card: var(--card-shadow);
   --shadow-card-lg: var(--card-shadow-lg);
   --shadow-cta: var(--cta-shadow);
@@ -151,6 +181,62 @@
   --chart-3: var(--info);
   --chart-4: var(--primary);
   --chart-5: var(--warn);
+
+  /* ── Settings redesign (2026-07-15) ──────────────────────────────────────
+     Exact design hex. Existing brand tokens already match the page bg (#f3efe7),
+     card gradient (primary→primary-deep), and amber (accent/accent-deep); these
+     cover the bespoke section greys and the on-dark membership-card colors. */
+  --settings-soft: #8a9389; /* sub-text, section labels */
+  --settings-faint: #a7ad9f; /* uppercase muted, placeholder */
+  --settings-ink: #2f3d34; /* input / chip text */
+  --settings-ink-strong: #25332b; /* Ask button text */
+  --settings-label: #4a564d; /* docs labels, session icons */
+  --settings-btn-text: #3d4a42; /* row-button text */
+  --settings-btn-border: #d7d1c4; /* row-button / input border */
+  --settings-btn-hover: #f2eee4; /* row-button hover / chip bg */
+  --settings-line: #e0dacd; /* section header rule */
+  --settings-hairline: #f2ede2; /* row border-top */
+  --settings-hairline-soft: #f6f2e9; /* session row border-top */
+  --settings-chip-border: #e6e0d3; /* chip / app-bar border */
+  --settings-outline: #e2dccf; /* Ask / back-button border */
+  --settings-code-bg: #f6f3ec; /* code box bg */
+  --settings-code-border: #ece6d9; /* code box border */
+  --settings-danger: #c0392b; /* revoke / logout text */
+  --settings-danger-border: #f0d3cf; /* danger button border */
+  --settings-danger-bg: #fdf3f2; /* danger button bg */
+  --settings-danger-hover: #fbe7e5; /* danger button hover */
+  --settings-dark-hover: #22382c; /* Create-token button hover */
+  --settings-info: #3763c4; /* "This device" text */
+  --settings-info-bg: #e9eefb; /* "This device" bg */
+  --settings-bg-desktop: radial-gradient(
+    1300px 800px at 15% -10%,
+    #f2efe6 0%,
+    #e8e3d8 55%,
+    #e1dccf 100%
+  );
+  --settings-bg-mobile: radial-gradient(
+    1100px 700px at 50% -12%,
+    #f2efe6 0%,
+    #e8e3d8 55%,
+    #e1dccf 100%
+  );
+  --membership-sage: #d6e2db; /* sage-white base (used at .5–.62 via /opacity) */
+  --membership-mint: #7fd6a3; /* Security strong, tier ring text, shield */
+  --membership-mint-soft: #a9e6c4; /* Verified pill text */
+  --membership-mint-dim: #c7ddcf; /* command text on dark */
+  --membership-mint-icon: #8fb3a1; /* copy icon on dark */
+  --membership-card-bg: linear-gradient(168deg, #1a4536 0%, #0e241c 100%);
+  --membership-glow: radial-gradient(
+    circle,
+    rgb(245 166 35 / 0.22) 0%,
+    rgb(245 166 35 / 0) 68%
+  );
+  --membership-avatar: repeating-linear-gradient(
+    45deg,
+    #3a5c4d 0 6px,
+    #2c5142 6px 12px
+  );
+  --membership-usage-fill: linear-gradient(90deg, #f5a623, #e8961a);
 }
 
 .dark {
@@ -317,6 +403,19 @@
   }
   80% {
     transform: translateX(6px);
+  }
+}
+
+/* Settings toast — slides up + fades in, centered (bakes the -50% X so the
+   fill-mode `both` final state keeps it horizontally centered). */
+@keyframes hsToastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
   }
 }
 

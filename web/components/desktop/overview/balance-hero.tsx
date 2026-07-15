@@ -26,15 +26,18 @@ export function BalanceHero({
           className="mt-0.5 text-[40px] font-extrabold tracking-tight tabular-nums"
         />
       </div>
-      <div className="flex gap-[10px]">
+      <div className="flex flex-wrap gap-[10px]">
         {actions.map(({ action, label, primary }) => (
           <button
             key={action}
             type="button"
             aria-label={label}
             onClick={() => onQuickAction(action, chipLabel(action))}
+            // Canonical xl size (52px / 15px radius / 16px text) + uniform min-width
+            // so the hero quick-actions align with the wallet ActionButtons and the
+            // rest of the app; dark-surface fills stay bespoke to the gradient hero.
             className={cn(
-              "cursor-pointer rounded-[12px] px-5 py-[11px] text-sm font-bold transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-foreground/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary",
+              "inline-flex h-[52px] min-w-[112px] cursor-pointer items-center justify-center rounded-[15px] px-6 text-base font-bold transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-foreground/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary",
               primary
                 ? "bg-accent text-accent-foreground"
                 : "border border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground"

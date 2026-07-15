@@ -28,6 +28,10 @@ export interface UserRecord {
   simSwapDetectedAt: Date | null;
   /** When the KYC tier last changed; drives the tier-change cooling-off gate. */
   tierChangedAt: Date | null;
+  /** Account-creation timestamp — "member since" on the settings membership card. */
+  createdAt: Date;
+  /** The user's bound trusted device (null = none); a security-strength signal. */
+  pinnedDeviceId: string | null;
 }
 
 /**

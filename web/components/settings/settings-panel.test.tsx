@@ -1,109 +1,63 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-
-const routerPush = vi.hoisted(() => vi.fn())
-const logoutMutation = vi.hoisted(() => ({
-  current: {} as Record<string, unknown>,
-}))
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: routerPush }),
-}))
-
-vi.mock("@/lib/query/auth", () => ({
-  useProfile: () => ({
-    isLoading: false,
-    isError: false,
-    data: {
-      email: "user@example.com",
-      fullName: "Ada Tester",
-      phone: null,
-      kycStatus: "verified",
-      kycTier: "tier_1",
-      fiatCurrency: "NGN",
-      limits: { perTxFiatMax: 50000, dailyFiatMax: 50000, dailyTxCountMax: 5 },
-    },
-  }),
-  useLogout: () => logoutMutation.current,
-}))
-
-vi.mock("@/lib/query/hooks", () => ({
-  useConfig: () => ({
-    data: {
-      fiats: [
-        {
-          code: "NGN",
-          displayName: "Nigerian Naira",
-          symbol: "₦",
-          decimals: 2,
-        },
-      ],
-    },
-  }),
-}))
-
-// Sections have their own specs — the orchestrator test asserts composition.
-vi.mock("./profile-section", () => ({
-  ProfileSection: () => <div data-testid="profile-section" />,
-}))
-vi.mock("./payid-section", () => ({
-  PayIdSection: () => <div data-testid="payid-section" />,
-}))
-vi.mock("./public-nicknames-section", () => ({
-  PublicNicknamesSection: () => <div data-testid="public-nicknames-section" />,
-}))
-vi.mock("./VerificationSection", () => ({
-  VerificationSection: () => <div data-testid="verification-section" />,
-}))
-vi.mock("./security-section", () => ({
-  SecuritySection: () => <div data-testid="security-section" />,
-}))
-vi.mock("./mcp-section", () => ({
-  McpSection: () => <div data-testid="mcp-section" />,
-}))
-
-// LanguageSelector needs the translation context; stub it here.
-vi.mock("@/components/shared/language-selector", () => ({
-  LanguageSelector: () => <div data-testid="language-selector" />,
-}))
-
 import { SettingsPanel } from "./settings-panel"
 
-describe("SettingsPanel (orchestrator)", () => {
-  beforeEach(() => {
-    routerPush.mockReset()
-    logoutMutation.current = {
-      mutate: vi.fn((_: unknown, opts?: { onSettled?: () => void }) =>
-        opts?.onSettled?.()
-      ),
-      isPending: false,
-    }
-  })
+const push = vi.hoisted(() => vi.fn())
+const logout = vi.hoisted(() => ({
+  current: { mutateAsync: vi.fn().mockResolvedValue(undefined) },
+}))
+const showToast = vi.hoisted(() => vi.fn())
 
-  it("composes the profile, PayID, nicknames, security, MCP and language sections", () => {
-    render(<SettingsPanel />)
-    expect(screen.getByTestId("profile-section")).toBeInTheDocument()
-    expect(screen.getByTestId("payid-section")).toBeInTheDocument()
-    expect(screen.getByTestId("public-nicknames-section")).toBeInTheDocument()
-    expect(screen.getByTestId("verification-section")).toBeInTheDocument()
-    expect(screen.getByTestId("security-section")).toBeInTheDocument()
-    expect(screen.getByTestId("mcp-section")).toBeInTheDocument()
-    expect(screen.getByTestId("language-selector")).toBeInTheDocument()
-  })
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
+vi.mock("@/lib/query/auth", () => ({ useLogout: () => logout.current }))
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ showToast }) }))
+vi.mock("./membership-card", () => ({
+  MembershipCard: () => <div data-testid="membership" />,
+}))
+vi.mock("./account-section", () => ({
+  AccountSection: () => <div data-testid="account" />,
+}))
+vi.mock("./security-section", () => ({
+  SecuritySection: () => <div data-testid="security" />,
+}))
+vi.mock("./connected-agents-section", () => ({
+  ConnectedAgentsSection: () => <div data-testid="agents" />,
+}))
+vi.mock("./preferences-section", () => ({
+  PreferencesSection: () => <div data-testid="prefs" />,
+}))
+vi.mock("@/components/shared/toast", () => ({
+  Toast: () => <div data-testid="toast" />,
+}))
 
-  it("renders the real daily limit from the profile", () => {
-    render(<SettingsPanel />)
-    expect(screen.getByText("₦50,000")).toBeInTheDocument()
+beforeEach(() => {
+  push.mockClear()
+  showToast.mockClear()
+  logout.current = { mutateAsync: vi.fn().mockResolvedValue(undefined) }
+})
+
+describe("SettingsPanel", () => {
+  it("composes the membership card and all four sections", () => {
+    render(<SettingsPanel density="desktop" />)
+    expect(screen.getByTestId("membership")).toBeInTheDocument()
+    expect(screen.getByTestId("account")).toBeInTheDocument()
+    expect(screen.getByTestId("security")).toBeInTheDocument()
+    expect(screen.getByTestId("agents")).toBeInTheDocument()
+    expect(screen.getByTestId("prefs")).toBeInTheDocument()
   })
 
   it("logs out and redirects to /login", async () => {
-    const user = userEvent.setup()
-    render(<SettingsPanel />)
+    render(<SettingsPanel density="desktop" />)
+    await userEvent.click(screen.getByRole("button", { name: "Log out" }))
+    expect(logout.current.mutateAsync).toHaveBeenCalled()
+    expect(push).toHaveBeenCalledWith("/login")
+  })
 
-    await user.click(screen.getByRole("button", { name: /log out/i }))
-
-    expect(logoutMutation.current.mutate).toHaveBeenCalled()
-    expect(routerPush).toHaveBeenCalledWith("/login")
+  it("mobile renders the app-bar back button wired to onBack", async () => {
+    const onBack = vi.fn()
+    render(<SettingsPanel density="mobile" onBack={onBack} />)
+    await userEvent.click(screen.getByRole("button", { name: "Back" }))
+    expect(onBack).toHaveBeenCalled()
   })
 })

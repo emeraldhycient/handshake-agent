@@ -29,6 +29,8 @@ const baseUser = (overrides: Partial<UserRecord> = {}): UserRecord => ({
   kycTier: 'tier_1',
   simSwapDetectedAt: null,
   tierChangedAt: null,
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  pinnedDeviceId: null,
   ...overrides,
 });
 

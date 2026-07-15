@@ -86,7 +86,7 @@ export function DashboardExperience() {
       case "tickets":
         return <TicketsPage onQuickAction={handleQuickAction} />
       case "settings":
-        return <SettingsPage />
+        return <SettingsPage onAsk={() => setDPage("overview")} />
     }
   }
 
@@ -110,8 +110,11 @@ export function DashboardExperience() {
         {/* Active page — fills remaining height (main landmark + skip target) */}
         <main id="main-content" className="flex min-h-0 flex-1 overflow-hidden">
           {renderPage()}
-          {/* ── Chat rail (hidden below lg) ────────────────────────────────────── */}
-          <ChatRail store={defaultChatStore} className="hidden lg:flex" />
+          {/* Chat rail (hidden below lg) — hidden on Settings so the passport
+              layout gets the full width (design is a standalone wide surface). */}
+          {dPage !== "settings" && (
+            <ChatRail store={defaultChatStore} className="hidden lg:flex" />
+          )}
         </main>
       </div>
     </div>

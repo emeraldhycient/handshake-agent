@@ -28,6 +28,8 @@ const PROFILE = {
   kycTier: 'tier_1',
   fiatCurrency: 'NGN',
   limits: null,
+  memberSince: '2026-01-15T00:00:00.000Z',
+  security: { score: 2, label: 'fair' },
 };
 
 const NAME = { firstName: 'Amara', lastName: 'Okeke' };

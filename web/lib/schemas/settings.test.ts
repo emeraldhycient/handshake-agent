@@ -8,69 +8,53 @@ import {
 } from "./settings"
 
 describe("EditProfileFormSchema", () => {
+  const base = { firstName: "Olivia", lastName: "Lee" }
+
   it("accepts an empty phone (means 'no change')", () => {
-    const parsed = EditProfileFormSchema.safeParse({
-      phone: "",
-      fiatCurrency: "NGN",
-    })
-    expect(parsed.success).toBe(true)
+    expect(
+      EditProfileFormSchema.safeParse({ ...base, phone: "" }).success
+    ).toBe(true)
   })
 
   it("rejects a malformed phone", () => {
-    const parsed = EditProfileFormSchema.safeParse({
-      phone: "abc",
-      fiatCurrency: "NGN",
-    })
-    expect(parsed.success).toBe(false)
+    expect(
+      EditProfileFormSchema.safeParse({ ...base, phone: "abc" }).success
+    ).toBe(false)
   })
 
   it("accepts a +234 international phone", () => {
-    const parsed = EditProfileFormSchema.safeParse({
-      phone: "+2348012345678",
-      fiatCurrency: "NGN",
-    })
-    expect(parsed.success).toBe(true)
+    expect(
+      EditProfileFormSchema.safeParse({ ...base, phone: "+2348012345678" })
+        .success
+    ).toBe(true)
   })
 })
 
 describe("toUpdateProfileRequest", () => {
-  const current = { phone: "+2348012345678", fiatCurrency: "NGN" }
+  const current = { phone: "+2348012345678" }
+  const name = { firstName: "Olivia", lastName: "Lee" }
 
-  it("returns only the fields that changed", () => {
+  it("returns the phone when it changed", () => {
     expect(
-      toUpdateProfileRequest(
-        { phone: "+2348012345678", fiatCurrency: "GHS" },
-        current
-      )
-    ).toEqual({ fiatCurrency: "GHS" })
-    expect(
-      toUpdateProfileRequest(
-        { phone: "+2347000000000", fiatCurrency: "NGN" },
-        current
-      )
+      toUpdateProfileRequest({ ...name, phone: "+2347000000000" }, current)
     ).toEqual({ phone: "+2347000000000" })
   })
 
-  it("returns null when nothing changed", () => {
+  it("returns null when the phone is unchanged", () => {
     expect(
-      toUpdateProfileRequest(
-        { phone: "+2348012345678", fiatCurrency: "NGN" },
-        current
-      )
+      toUpdateProfileRequest({ ...name, phone: "+2348012345678" }, current)
     ).toBeNull()
   })
 
   it("treats an empty phone as 'no change' (never clears the phone)", () => {
-    expect(
-      toUpdateProfileRequest({ phone: "", fiatCurrency: "NGN" }, current)
-    ).toBeNull()
+    expect(toUpdateProfileRequest({ ...name, phone: "" }, current)).toBeNull()
   })
 
   it("handles a user with no phone on file", () => {
     expect(
       toUpdateProfileRequest(
-        { phone: "+2347000000000", fiatCurrency: "NGN" },
-        { phone: null, fiatCurrency: "NGN" }
+        { ...name, phone: "+2347000000000" },
+        { phone: null }
       )
     ).toEqual({ phone: "+2347000000000" })
   })
@@ -149,9 +133,9 @@ describe("CreateTokenFormSchema", () => {
   })
 
   it("requires a label and a PIN", () => {
-    expect(CreateTokenFormSchema.safeParse({ ...base, label: " " }).success).toBe(
-      false
-    )
+    expect(
+      CreateTokenFormSchema.safeParse({ ...base, label: " " }).success
+    ).toBe(false)
     expect(CreateTokenFormSchema.safeParse({ ...base, pin: "" }).success).toBe(
       false
     )

@@ -197,6 +197,8 @@ export class IdentityPrismaRepository implements IIdentityRepository {
         kycTier: true,
         simSwapDetectedAt: true,
         tierChangedAt: true,
+        createdAt: true,
+        pinnedDeviceId: true,
       },
     });
 
@@ -209,6 +211,8 @@ export class IdentityPrismaRepository implements IIdentityRepository {
       kycTier: row.kycTier,
       simSwapDetectedAt: row.simSwapDetectedAt,
       tierChangedAt: row.tierChangedAt,
+      createdAt: row.createdAt,
+      pinnedDeviceId: row.pinnedDeviceId,
     };
   }
 

@@ -81,7 +81,7 @@ export function WalletDepositPanel({
         </div>
       )}
 
-      <div className="flex items-start gap-[18px]">
+      <div className="flex flex-wrap items-start gap-x-[18px] gap-y-3">
         <div className="flex-none">
           {depositLoading ? (
             <Skeleton className="size-[86px] rounded-xl" />
@@ -103,7 +103,7 @@ export function WalletDepositPanel({
           )}
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[190px] flex-1">
           {depositLoading ? (
             <>
               <Skeleton className="h-3 w-32" />
@@ -153,7 +153,8 @@ export function WalletDepositPanel({
         </div>
 
         <Button
-          className="flex-none rounded-[11px] bg-foreground font-bold text-background hover:opacity-90"
+          size="xl"
+          className="ml-auto flex-none bg-foreground font-bold text-background hover:opacity-90"
           onClick={() => onQuickAction("receive", chipLabel("receive"))}
         >
           Show QR in chat

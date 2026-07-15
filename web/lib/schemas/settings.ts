@@ -14,34 +14,33 @@ import {
 
 // ─── Edit profile ─────────────────────────────────────────────────────────────
 
-/** Same loose E.164 rule as UpdateProfileRequestSchema; "" means "no change". */
+/**
+ * Name is only editable before KYC (the server 409s once verified); display
+ * currency lives in Preferences now. Phone follows the loose E.164 rule;
+ * "" means "no change".
+ */
 export const EditProfileFormSchema = z.object({
+  firstName: z.string().trim().max(80),
+  lastName: z.string().trim().max(80),
   phone: z
     .string()
     .regex(/^\+?[0-9]{8,15}$/, "Enter a valid phone number")
     .or(z.literal("")),
-  fiatCurrency: z.string().min(1, "Choose a display currency"),
 })
 export type EditProfileFormValues = z.infer<typeof EditProfileFormSchema>
 
 /**
- * Diff the form against the current profile into a PATCH body with only the
- * changed fields, or null when there is nothing to save. An empty phone is
- * "leave unchanged" — this surface never clears a phone.
+ * Diff the phone against the current profile into a PATCH body, or null when
+ * unchanged. An empty phone is "leave unchanged" — this surface never clears
+ * a phone. (Name goes through the separate POST /profile/name endpoint.)
  */
 export function toUpdateProfileRequest(
   values: EditProfileFormValues,
-  current: { phone: string | null; fiatCurrency: string }
+  current: { phone: string | null }
 ): UpdateProfileRequest | null {
-  const body: UpdateProfileRequest = {}
   const phone = values.phone.trim()
-  if (phone && phone !== (current.phone ?? "")) body.phone = phone
-  if (values.fiatCurrency && values.fiatCurrency !== current.fiatCurrency) {
-    body.fiatCurrency = values.fiatCurrency
-  }
-  return body.phone === undefined && body.fiatCurrency === undefined
-    ? null
-    : body
+  if (phone && phone !== (current.phone ?? "")) return { phone }
+  return null
 }
 
 // ─── Change PIN ───────────────────────────────────────────────────────────────

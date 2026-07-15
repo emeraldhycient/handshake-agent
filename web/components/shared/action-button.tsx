@@ -32,15 +32,19 @@ export function ActionButton({
       aria-label={label}
       onClick={onClick}
       variant={variant === "primary" ? "default" : "outline"}
+      // Inline quick-actions use the canonical xl size (52px) so they align with
+      // the rest of the app's buttons; the mobile stacked icon-tile keeps its own
+      // auto height.
+      size={stacked ? "default" : "xl"}
       className={cn(
-        "rounded-[12px] font-bold",
+        "font-bold",
         // Unified primary: accent fill across every surface so the lead action
         // looks the same on the dark hero and the light wallet header.
         variant === "primary" &&
           "bg-accent text-accent-foreground hover:bg-accent-deep",
         stacked
-          ? "flex h-auto flex-col items-center gap-1.5 px-2 py-[11px] text-[12px]"
-          : "px-5 py-[11px] text-sm",
+          ? "flex h-auto flex-col items-center gap-1.5 rounded-[12px] px-2 py-[11px] text-[12px]"
+          : "min-w-[112px]",
         className
       )}
     >

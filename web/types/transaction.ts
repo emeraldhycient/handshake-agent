@@ -5,6 +5,8 @@ export interface CopyButtonProps {
   value: string
   /** Used in the aria-label ("Copy <label>" / "<label> copied"). */
   label: string
+  /** "onDark" swaps to a light mint icon for placement on a dark surface. */
+  tone?: "default" | "onDark"
 }
 
 export interface ExplorerLinkProps {

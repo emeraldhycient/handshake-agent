@@ -52,6 +52,8 @@ function makeUser(over?: Partial<UserRecord>): UserRecord {
     kycTier: 'tier_2',
     simSwapDetectedAt: null,
     tierChangedAt: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    pinnedDeviceId: null,
     ...over,
   };
 }
