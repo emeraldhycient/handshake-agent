@@ -52,7 +52,7 @@ export function HandleInput({
       </div>
       <Button
         type="button"
-        size="sm"
+        size="lg"
         onClick={onCommit}
         disabled={pending}
         className="flex-none"

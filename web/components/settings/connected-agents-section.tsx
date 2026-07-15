@@ -49,7 +49,7 @@ export function ConnectedAgentsSection({ density }: SettingsSectionProps) {
       action={
         <Button
           type="button"
-          size="sm"
+          size="lg"
           onClick={() => setCreating(true)}
           className="flex-none"
         >

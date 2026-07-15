@@ -192,7 +192,7 @@ export function DangerButton({
     <Button
       type="button"
       variant="destructive"
-      size="sm"
+      size="lg"
       onClick={onClick}
       aria-label={ariaLabel}
       className={cn("flex-none", density === "mobile" && "ml-auto")}
@@ -221,7 +221,7 @@ export function RowButton({
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size="lg"
       onClick={onClick}
       className={cn("flex-none", density === "mobile" && "ml-auto", className)}
     >
