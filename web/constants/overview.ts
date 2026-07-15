@@ -1,6 +1,6 @@
 import type { ChatAction } from "@/lib/schemas"
 
-/** Hero quick-actions, in display order. `swap` is filtered by capability at render. */
+/** Hero quick-actions, in display order. `sell` is filtered by capability at render. */
 export const HERO_ACTIONS: {
   action: ChatAction
   label: string
@@ -9,5 +9,5 @@ export const HERO_ACTIONS: {
   { action: "buy", label: "Buy", primary: true },
   { action: "send", label: "Send", primary: false },
   { action: "receive", label: "Receive", primary: false },
-  { action: "swap", label: "Swap", primary: false },
+  { action: "sell", label: "Sell", primary: false },
 ]
