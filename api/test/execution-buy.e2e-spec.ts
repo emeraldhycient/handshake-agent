@@ -252,7 +252,11 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       undefined as never, // swapProvider: not needed on buy proposal path
     );
 
-    const settlementRepo = new SettlementPrismaRepository(ps, config);
+    const settlementRepo = new SettlementPrismaRepository(
+      ps,
+      config,
+      assetRegistry,
+    );
 
     executionService = new ExecutionService(
       proposalRepo,
