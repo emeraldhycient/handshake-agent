@@ -192,10 +192,13 @@ export function DangerButton({
     <Button
       type="button"
       variant="destructive"
-      size="lg"
+      size="xl"
       onClick={onClick}
       aria-label={ariaLabel}
-      className={cn("flex-none", density === "mobile" && "ml-auto")}
+      className={cn(
+        "min-w-[160px] flex-none",
+        density === "mobile" && "ml-auto"
+      )}
     >
       {children}
     </Button>
@@ -221,9 +224,13 @@ export function RowButton({
     <Button
       type="button"
       variant="outline"
-      size="lg"
+      size="xl"
       onClick={onClick}
-      className={cn("flex-none", density === "mobile" && "ml-auto", className)}
+      className={cn(
+        "min-w-[160px] flex-none",
+        density === "mobile" && "ml-auto",
+        className
+      )}
     >
       {children}
     </Button>

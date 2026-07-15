@@ -375,12 +375,12 @@ function TierRing({ tierNum, mobile }: { tierNum: number; mobile: boolean }) {
       <div
         className={cn(
           "absolute inset-0 flex flex-col items-center justify-center",
-          mobile ? "gap-[3px]" : "gap-0.5"
+          mobile ? "gap-1" : "gap-1.5"
         )}
       >
         <span
           className={cn(
-            "leading-none font-semibold tracking-[0.1em] text-membership-sage/60 uppercase",
+            "leading-none font-semibold tracking-[0.12em] text-membership-sage/75 uppercase",
             mobile ? "text-[9px]" : "text-[10px]"
           )}
         >
@@ -389,14 +389,14 @@ function TierRing({ tierNum, mobile }: { tierNum: number; mobile: boolean }) {
         <span
           className={cn(
             "leading-none font-extrabold",
-            mobile ? "text-[21px]" : "text-[28px]"
+            mobile ? "text-[20px]" : "text-[26px]"
           )}
         >
           {tierNum}
         </span>
         <span
           className={cn(
-            "leading-none text-membership-sage/[.55]",
+            "leading-none text-membership-sage/70",
             mobile ? "text-[9px]" : "text-[10px]"
           )}
         >

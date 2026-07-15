@@ -49,9 +49,9 @@ export function ConnectedAgentsSection({ density }: SettingsSectionProps) {
       action={
         <Button
           type="button"
-          size="lg"
+          size="xl"
           onClick={() => setCreating(true)}
-          className="flex-none"
+          className="min-w-[160px] flex-none"
         >
           Create token
         </Button>

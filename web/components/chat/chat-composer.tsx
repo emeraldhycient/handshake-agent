@@ -32,7 +32,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className="bg-white">
+    <div className="bg-white pt-3 pb-4">
       {/* Chips row — horizontal scroll, no scrollbar */}
       <div
         className="flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pt-1.5 pb-2.5"

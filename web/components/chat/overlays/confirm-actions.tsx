@@ -19,20 +19,22 @@ export function ConfirmActions({
     <div className="mt-4 flex flex-col gap-2">
       {isExpired ? (
         <Button
+          size="xl"
           onClick={onCancel}
           disabled
           aria-disabled
-          className="w-full cursor-not-allowed gap-2 bg-muted py-4 text-base font-bold text-muted-foreground"
+          className="w-full cursor-not-allowed gap-2 bg-muted font-bold text-muted-foreground"
         >
           Quote expired — request a new one
         </Button>
       ) : (
         <Button
+          variant="accent"
+          size="xl"
           onClick={onConfirm}
           disabled={loading}
           className={cn(
-            "w-full gap-2 bg-accent py-4 text-base font-bold text-accent-foreground",
-            "hover:bg-accent-deep",
+            "w-full gap-2",
             loading && "cursor-not-allowed opacity-70"
           )}
         >
@@ -48,10 +50,11 @@ export function ConfirmActions({
         </Button>
       )}
       <Button
-        variant="ghost"
+        variant="outline"
+        size="xl"
         onClick={onCancel}
         disabled={loading}
-        className="w-full text-sm font-semibold text-muted-foreground"
+        className="w-full font-semibold"
       >
         {isExpired ? "Close" : "Cancel"}
       </Button>
