@@ -97,6 +97,9 @@ export function mapOutcomeToMessages(
         estimatedArrivalSec: sw.estimatedArrivalSec,
         expiresAt: sw.expiresAt,
         lockSeconds,
+        // Bug 2: carry the rehydrated proposal status so an executed/rejected
+        // swap reloads as a terminal card, not a clickable quote.
+        proposalStatus: outcome.proposalStatus,
       })
     } else {
       const rows: Array<{ label: string; value: string }> = []
@@ -153,15 +156,46 @@ export function mapOutcomeToMessages(
         const sn = c as SendProposalConfirmation
         receiveAmt = sn.cryptoAmount + " " + sn.asset
         receiveSub = "Amount sent"
-        rows.push({ label: "To", value: sn.toAddressMasked })
-        if (sn.beneficiaryLabel) {
-          rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+        // An internal (PayID) transfer settles instantly in-custody: no
+        // on-chain address to mask and no network fee. It is legible via the
+        // recipient's display name + handle instead. `instant` is the
+        // authoritative server signal; the absent-address fallback covers any
+        // older persisted row that predates the field (defensive, never the
+        // other way around — an on-chain send always carries toAddressMasked).
+        const isInternalTransfer =
+          sn.instant === true ||
+          (!sn.toAddressMasked &&
+            !!(sn.recipientHandle || sn.recipientDisplayName))
+
+        if (isInternalTransfer) {
+          const name = sn.recipientDisplayName
+          // recipientHandle already carries the '@' sigil from the resolver
+          // (displayHandle: '@' + handle, threaded through the proposal
+          // confirmation) — normalize to exactly one leading '@' rather than
+          // blindly prepending, which produced a literal "@@handle".
+          const raw = sn.recipientHandle
+          const handle = raw ? (raw.startsWith("@") ? raw : `@${raw}`) : ""
+          rows.push({
+            label: "To",
+            value: [name, handle].filter(Boolean).join(" · "),
+          })
+          if (sn.beneficiaryLabel) {
+            rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+          }
+          // Never a literal "0 USDT" fee row — an instant ledger transfer has
+          // no network fee to itemize, so state that directly instead.
+          rows.push({ label: "Delivery", value: "Instant · No network fee" })
+        } else {
+          rows.push({ label: "To", value: sn.toAddressMasked ?? "" })
+          if (sn.beneficiaryLabel) {
+            rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+          }
+          rows.push({ label: "Network", value: sn.network })
+          rows.push({
+            label: "Network fee",
+            value: sn.networkFeeCrypto + " " + sn.asset,
+          })
         }
-        rows.push({ label: "Network", value: sn.network })
-        rows.push({
-          label: "Network fee",
-          value: sn.networkFeeCrypto + " " + sn.asset,
-        })
         totalLabel = "Total debit"
         totalValue = sn.totalDebit + " " + sn.asset
       }
@@ -180,6 +214,10 @@ export function mapOutcomeToMessages(
         lockSeconds,
         // ISO expiry drives the live quote countdown (and "expired" state on reload).
         expiresAt: c.expiresAt,
+        // Bug 2: on a rehydrated turn this carries the proposal's CURRENT status
+        // so an already-executed/rejected proposal renders a terminal card
+        // instead of a live "Review & confirm" button that would 409.
+        proposalStatus: outcome.proposalStatus,
       })
     }
 

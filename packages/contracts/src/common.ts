@@ -49,3 +49,19 @@ export const CryptoAmountSchema = z
 export const NetworkSchema = z.enum(['TRON'])
 
 export const IdempotencyKeySchema = z.string().uuid()
+
+// PayId schema: username handles for @-mention sends (Spec 2 internal transfer).
+// Format: 3-30 chars of lowercase letters, digits, and underscore.
+// Reserved words prevent squatting on admin/system/help handles.
+const RESERVED_HANDLES = new Set(['admin', 'support', 'handshake', 'payid', 'pay', 'system', 'root', 'help', 'me'])
+export const PayIdSchema = z
+  .string()
+  .regex(/^[a-z0-9_]{3,30}$/, 'handle must be 3-30 chars of a-z, 0-9, _')
+  .refine((h) => !RESERVED_HANDLES.has(h), 'that handle is reserved')
+export type PayId = z.infer<typeof PayIdSchema>
+
+// Normalize a user-entered handle: strip leading @, trim, lowercase.
+// Used to sanitize handles before validation against PayIdSchema.
+export function normalizeHandle(raw: string): string {
+  return raw.trim().replace(/^@/, '').toLowerCase()
+}

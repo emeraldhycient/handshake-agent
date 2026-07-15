@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { ProposalStatusSchema } from "@handshake-agent/contracts"
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,13 @@ export const QuoteViewSchema = z.object({
   lockSeconds: z.number(),
   /** ISO datetime string — the proposal's server-issued expiry. Drives the live countdown. */
   expiresAt: z.string().optional(),
+  /**
+   * The proposal's CURRENT lifecycle status, present only on a REHYDRATED card
+   * (GET /chat/messages). When `executed`/`rejected` the card renders a
+   * terminal, non-actionable state instead of a live quote whose confirm would
+   * 409 (Bug 2). Absent on a live/mock quote → normal active/countdown card.
+   */
+  proposalStatus: ProposalStatusSchema.optional(),
 })
 export type QuoteView = z.infer<typeof QuoteViewSchema>
 
@@ -278,6 +286,12 @@ export const SwapViewSchema = z.object({
   expiresAt: z.string(),
   /** Lock duration in seconds — fallback when expiresAt is absent (mock flow). */
   lockSeconds: z.number(),
+  /**
+   * The proposal's CURRENT lifecycle status on a REHYDRATED card — drives the
+   * terminal "Completed"/"Cancelled" state on reload (Bug 2). Absent on a live
+   * swap proposal → normal active/countdown card.
+   */
+  proposalStatus: ProposalStatusSchema.optional(),
 })
 export type SwapView = z.infer<typeof SwapViewSchema>
 // transactions (history list)

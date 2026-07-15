@@ -32,7 +32,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className="bg-background">
+    <div className="bg-white">
       {/* Chips row — horizontal scroll, no scrollbar */}
       <div
         className="flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pt-1.5 pb-2.5"
@@ -82,7 +82,7 @@ export function ChatComposer({
           {/* Mic / record control */}
           {recording ? (
             <div className="flex items-center gap-2">
-              <span className="text-danger text-xs tabular-nums">
+              <span className="text-xs text-danger tabular-nums">
                 {Math.floor(recordSeconds / 60)}:
                 {String(recordSeconds % 60).padStart(2, "0")}
               </span>
@@ -100,7 +100,7 @@ export function ChatComposer({
                 onClick={onRecordStop}
                 className="text-danger focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
-                <span className="bg-danger block h-3 w-3 rounded-[2px]" />
+                <span className="block h-3 w-3 rounded-[2px] bg-danger" />
               </button>
             </div>
           ) : (

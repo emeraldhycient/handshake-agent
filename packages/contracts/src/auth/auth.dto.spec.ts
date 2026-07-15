@@ -119,6 +119,29 @@ describe("auth contracts", () => {
     expect(v.lastName).toBeUndefined();
   });
 
+  it("me response accepts a payId when present (Spec 2 @-handle)", () => {
+    const v = MeResponseSchema.parse({
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "a@b.com",
+      kycStatus: "verified",
+      kycTier: "tier_1",
+      hasPin: true,
+      payId: "ada",
+    });
+    expect(v.payId).toBe("ada");
+  });
+
+  it("me response accepts an omitted payId (optional — not yet claimed)", () => {
+    const v = MeResponseSchema.parse({
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "a@b.com",
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      hasPin: false,
+    });
+    expect(v.payId).toBeUndefined();
+  });
+
   it("refresh request rejects an empty-string token but allows it omitted (cookie-primary)", () => {
     // An explicit empty string is still invalid...
     expect(() => RefreshRequestSchema.parse({ refreshToken: "" })).toThrow();

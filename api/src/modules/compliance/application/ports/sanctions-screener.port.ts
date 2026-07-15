@@ -21,6 +21,13 @@ export interface SanctionsScreenInput {
   userId?: string;
 }
 
+export interface SanctionsScreenIdentityInput {
+  /** The subject user's id — the identity (not an address) to screen. */
+  userId: string;
+  /** Optional caller-supplied correlation reference for traceability. */
+  reference?: string | null;
+}
+
 export interface SanctionsScreenResult {
   /** Whether the address passed screening (true = clear, false = flagged). */
   passed: boolean;
@@ -45,4 +52,22 @@ export interface ISanctionsScreener {
    *          passed:false means the address is flagged and the send must be blocked.
    */
   screen(input: SanctionsScreenInput): Promise<SanctionsScreenResult>;
+
+  /**
+   * Screens a counterparty by IDENTITY (userId) rather than by on-chain
+   * address. Used for internal (user→user) transfers, which have no
+   * destination address to AML-screen — the subject is a KYC-verified platform
+   * user. This is a distinct capability from {@link screen}: providers that
+   * only do address AML (e.g. Blockradar) return a safe pass-through here
+   * rather than fail-closing, and must NOT attempt an address lookup.
+   *
+   * Implementations must be non-throwing and idempotent.
+   *
+   * @returns SanctionsScreenResult — passed:true means clear to proceed;
+   *          passed:false means the counterparty identity is flagged and the
+   *          transfer must be blocked.
+   */
+  screenIdentity(
+    input: SanctionsScreenIdentityInput,
+  ): Promise<SanctionsScreenResult>;
 }

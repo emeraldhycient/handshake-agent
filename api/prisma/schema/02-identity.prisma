@@ -39,6 +39,12 @@ model User {
   /// fall back to the catalog default fiat.
   preferredFiatCurrency String?
   lastTransactionAt   DateTime?  @db.Timestamptz
+  /// User's public handle for PayID-based sends (Spec 2). Case-insensitive
+  /// uniqueness is enforced via a raw-SQL partial index in the migration
+  /// (a plain @unique does not cover case + Postgres NULL-distinctness).
+  payId               String?    @unique
+  /// When payId was last changed — drives any future rate-limit on rename.
+  payIdChangedAt      DateTime?  @db.Timestamptz
   createdAt           DateTime   @default(now()) @db.Timestamptz
   updatedAt           DateTime   @updatedAt @db.Timestamptz
   deletedAt           DateTime?  @db.Timestamptz
@@ -51,6 +57,7 @@ model User {
   beneficiaries     Beneficiary[]
   contacts          Contact[]
   channelIdentities ChannelIdentity[]
+  publicAliases     PublicAlias[]
   // Money & product graph (defined in their own module files)
   wallets           Wallet[]
   quotes            Quote[]
@@ -387,4 +394,19 @@ model ChannelIdentity {
   @@index([normalizedPhone, channel, deletedAt])
   @@index([simSwapDetectedAt])
   @@map("channel_identities")
+}
+
+/// Additional public-facing nickname(s) a user can be resolved by, beyond their
+/// primary payId (Spec 2 — PayID + public nicknames). Case-insensitive
+/// uniqueness across ALL aliases is enforced via a raw-SQL index in the
+/// migration (Prisma can't express `lower(alias)` in a declarative @@unique).
+model PublicAlias {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @db.Uuid
+  alias     String
+  createdAt DateTime @default(now()) @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("public_aliases")
 }

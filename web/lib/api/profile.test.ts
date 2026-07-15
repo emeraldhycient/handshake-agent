@@ -16,8 +16,12 @@ vi.mock("./client", () => ({
 }))
 
 import {
+  changePayId,
   changePin,
   createPat,
+  createPublicNickname,
+  deletePublicNickname,
+  getPublicNicknames,
   listPats,
   listProfileSessions,
   revokePat,
@@ -166,5 +170,61 @@ describe("profile api client", () => {
     await revokePat(patItem.id)
 
     expect(del).toHaveBeenCalledWith(`/profile/tokens/${patItem.id}`)
+  })
+
+  it("getPublicNicknames GETs and parses the nickname list", async () => {
+    get.mockResolvedValue({
+      data: {
+        nicknames: [
+          { id: "cccccccc-cccc-cccc-cccc-cccccccccccc", alias: "adaonly" },
+        ],
+      },
+    })
+
+    const result = await getPublicNicknames()
+
+    expect(get).toHaveBeenCalledWith("/profile/public-nicknames")
+    expect(result.nicknames[0].alias).toBe("adaonly")
+  })
+
+  it("createPublicNickname POSTs the validated body and parses the response", async () => {
+    post.mockResolvedValue({
+      data: { id: "cccccccc-cccc-cccc-cccc-cccccccccccc", alias: "adaonly" },
+    })
+
+    const result = await createPublicNickname({ alias: "adaonly" })
+
+    expect(post).toHaveBeenCalledWith("/profile/public-nicknames", {
+      alias: "adaonly",
+    })
+    expect(result.alias).toBe("adaonly")
+  })
+
+  it("createPublicNickname rejects a malformed alias before sending", async () => {
+    await expect(createPublicNickname({ alias: "AB" })).rejects.toThrow()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it("deletePublicNickname DELETEs /profile/public-nicknames/:id", async () => {
+    del.mockResolvedValue({ status: 204 })
+
+    await deletePublicNickname("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    expect(del).toHaveBeenCalledWith(
+      "/profile/public-nicknames/cccccccc-cccc-cccc-cccc-cccccccccccc"
+    )
+  })
+
+  it("changePayId PATCHes the validated body with no response body to parse", async () => {
+    patch.mockResolvedValue({ status: 204 })
+
+    await changePayId({ payId: "adaonly" })
+
+    expect(patch).toHaveBeenCalledWith("/profile/payid", { payId: "adaonly" })
+  })
+
+  it("changePayId rejects a malformed handle before sending", async () => {
+    await expect(changePayId({ payId: "a" })).rejects.toThrow()
+    expect(patch).not.toHaveBeenCalled()
   })
 })

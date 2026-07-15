@@ -140,6 +140,21 @@ describe('SendProposalConfirmationSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts an internal-transfer shape (no toAddressMasked, instant:true)', () => {
+    // An internal (PayID) transfer has no on-chain address — it carries the
+    // recipient's display name + handle and settles instantly (Task 6).
+    const { toAddressMasked: _omit, ...rest } = VALID_CONFIRMATION
+    const result = SendProposalConfirmationSchema.safeParse({
+      ...rest,
+      networkFeeCrypto: '0',
+      totalDebit: rest.cryptoAmount,
+      recipientDisplayName: 'Alice A.',
+      recipientHandle: 'alice',
+      instant: true,
+    })
+    expect(result.success).toBe(true)
+  })
+
   it('rejects a non-UUID proposalId', () => {
     const result = SendProposalConfirmationSchema.safeParse({
       ...VALID_CONFIRMATION,
@@ -148,10 +163,13 @@ describe('SendProposalConfirmationSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects a missing toAddressMasked', () => {
+  it('accepts a confirmation without toAddressMasked (internal transfer has no address)', () => {
+    // toAddressMasked is now optional: an on-chain send sets it, an internal
+    // (PayID) transfer omits it (Task 6). A normal send still validates with it
+    // present (see the VALID_CONFIRMATION cases above).
     const { toAddressMasked: _removed, ...rest } = VALID_CONFIRMATION
     const result = SendProposalConfirmationSchema.safeParse(rest)
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
   it('rejects a non-datetime expiresAt', () => {

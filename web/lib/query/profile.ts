@@ -8,12 +8,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   ChangePinRequest,
+  ClaimPayId,
   CreatePatRequest,
+  CreatePublicNickname,
   UpdateProfileRequest,
 } from "@handshake-agent/contracts"
 import {
+  changePayId,
   changePin,
   createPat,
+  createPublicNickname,
+  deletePublicNickname,
+  getPublicNicknames,
   listPats,
   listProfileSessions,
   revokePat,
@@ -90,6 +96,55 @@ export function useRevokePat() {
     mutationFn: (id: string) => revokePat(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: qk.pats })
+    },
+  })
+}
+
+/** GET /profile/public-nicknames — the user's own @-mention aliases (Spec 2). */
+export function usePublicNicknames() {
+  const accessToken = useAuthStore((s) => s.accessToken)
+  return useQuery({
+    queryKey: qk.publicNicknames,
+    queryFn: getPublicNicknames,
+    enabled: !!accessToken,
+    staleTime: STALE_TIME_MS,
+  })
+}
+
+export function useCreatePublicNickname() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: CreatePublicNickname) => createPublicNickname(body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.publicNicknames })
+    },
+  })
+}
+
+export function useDeletePublicNickname() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deletePublicNickname(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.publicNicknames })
+    },
+  })
+}
+
+/**
+ * PATCH /profile/payid — one-time PayID change. Invalidates BOTH `profile`
+ * (GET /profile) and `me` (GET /auth/me) — the fresh `@handle` is surfaced
+ * from either depending on which the caller reads (root CLAUDE.md §5 —
+ * TanStack Query owns all server state, so a successful mutation always
+ * refetches rather than leaving the old handle cached).
+ */
+export function useChangePayId() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ClaimPayId) => changePayId(body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.profile })
+      void queryClient.invalidateQueries({ queryKey: qk.me })
     },
   })
 }

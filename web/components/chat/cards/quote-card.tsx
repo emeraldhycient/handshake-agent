@@ -8,6 +8,7 @@ import { QuoteExpiryPill } from "@/components/chat/cards/quote-expiry-pill"
 import { ExpiringCardCTA } from "@/components/chat/cards/expiring-card-cta"
 import { useQuoteCountdown } from "@/hooks/use-quote-countdown"
 import { formatCountdown } from "@/lib/format"
+import { proposalTerminalState } from "@/lib/chat/proposal-terminal"
 import type { QuoteCardProps } from "@/types/components"
 
 /**
@@ -23,12 +24,16 @@ export function QuoteCard({
   totalValue,
   lockSeconds,
   expiresAt,
+  proposalStatus,
   density,
   onConfirm,
   className,
 }: QuoteCardProps) {
   const isMobile = density === "mobile"
   const { remaining, isExpired } = useQuoteCountdown(expiresAt, lockSeconds)
+  // Bug 2: an already-executed / rejected proposal (only present on a reloaded
+  // card) renders a terminal, non-actionable state instead of a live quote.
+  const terminal = proposalTerminalState(proposalStatus)
 
   return (
     <ChatCardShell density={density} desktopShadow className={className}>
@@ -51,6 +56,7 @@ export function QuoteCard({
           remaining={remaining}
           isExpired={isExpired}
           density={density}
+          terminal={terminal}
         />
       </div>
 
@@ -128,6 +134,7 @@ export function QuoteCard({
         activeHint={`Rate locked ${formatCountdown(remaining)} · No hidden fees`}
         expiredHint="Request a new quote to continue"
         density={density}
+        terminal={terminal}
       />
     </ChatCardShell>
   )

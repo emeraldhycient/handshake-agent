@@ -116,6 +116,7 @@ const mockProposalRepo = {
 
 const mockTransactionRepo = {
   findById: jest.fn(),
+  findByUserId: jest.fn(),
   findByIdempotencyKey: jest.fn(),
   create: jest.fn(),
   createSettlingWithProposal: jest.fn(),
@@ -137,6 +138,7 @@ const mockExecutionService = {
   executeSell: jest.fn(),
   executeSend: jest.fn(),
   executeSwap: jest.fn(),
+  executeInternalTransfer: jest.fn(),
 };
 
 const mockSessionService = {
@@ -263,6 +265,24 @@ describe('ProposalController.authorize', () => {
   it('uses request_step_up ref for send proposals', async () => {
     mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
     mockProposalRepo.getType.mockResolvedValue('send');
+    mockDirectiveService.issue.mockResolvedValue({
+      directiveId: 'dir-uuid',
+      nonce: 'abc123',
+      expiresAt: new Date(),
+    });
+
+    await controller.authorize('proposal-uuid', TEST_USER);
+
+    expect(mockDirectiveService.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'request_step_up' }),
+    );
+  });
+
+  it('uses request_step_up ref for internal_transfer proposals', async () => {
+    mockProposalRepo.findById.mockResolvedValue(
+      makeProposal({ type: 'internal_transfer' }),
+    );
+    mockProposalRepo.getType.mockResolvedValue('internal_transfer');
     mockDirectiveService.issue.mockResolvedValue({
       directiveId: 'dir-uuid',
       nonce: 'abc123',
@@ -488,6 +508,49 @@ describe('ProposalController.execute', () => {
     expect(mockExecutionService.executeSend).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: undefined }),
     );
+  });
+
+  it('dispatches internal_transfer (idempotencyKey=proposalId, resolving device) and returns status', async () => {
+    mockProposalRepo.findById.mockResolvedValue(
+      makeProposal({ type: 'internal_transfer' }),
+    );
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(
+      'device-uuid',
+    );
+    mockExecutionService.executeInternalTransfer.mockResolvedValue({
+      transactionId: 'txn-transfer',
+      status: 'completed',
+      receiptNumber: 'HS-2026-000001',
+      senderBalanceAfter: '90',
+      recipientBalanceAfter: '10',
+      recipientUserId: 'recipient-uuid',
+    });
+
+    const transferBody = { ...validBody, deviceFingerprint: 'web-fp-1' };
+    const result = await controller.execute(
+      'proposal-uuid',
+      transferBody,
+      TEST_USER,
+    );
+
+    expect(mockSessionService.findDeviceIdByFingerprint).toHaveBeenCalledWith(
+      TEST_USER.userId,
+      'web-fp-1',
+    );
+    expect(mockExecutionService.executeInternalTransfer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: TEST_USER.userId,
+        proposalId: 'proposal-uuid',
+        directiveId: validBody.directiveId,
+        nonce: validBody.nonce,
+        pin: validBody.pin,
+        // I8: idempotencyKey = proposalId (NOT the client-supplied body key).
+        idempotencyKey: 'proposal-uuid',
+        deviceId: 'device-uuid',
+      }),
+    );
+    expect(result.transactionId).toBe('txn-transfer');
+    expect(result.status).toBe('completed');
   });
 
   it('maps send InsufficientBalanceError → 422', async () => {
@@ -876,6 +939,30 @@ describe('TransactionStatusController', () => {
     expect(result.txHash).toBe('send-hash-001');
   });
 
+  it('uses the recipient @handle as counterparty for an internal_transfer (direction out)', async () => {
+    // Internal-transfer metadata has no address/destination — only the
+    // audit-snapshot recipientHandle. The projection must fall back to it so
+    // the settled transfer shows the recipient, mirroring the MCP surface.
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          recipientUserId: 'recipient-user-2',
+          recipientHandle: '@ada',
+        },
+      }),
+    );
+    mockSettlementRepo.findReceiptNumber.mockResolvedValue('HS-2026-000009');
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.direction).toBe('out');
+    expect(result.counterparty).toBe('@ada');
+  });
+
   it('omits on-chain fields when not present in metadata', async () => {
     mockTransactionRepo.findById.mockResolvedValue(
       makeTransaction({
@@ -900,6 +987,28 @@ describe('TransactionStatusController', () => {
     expect(result.network).toBeUndefined();
     expect(result.fees).toBeUndefined();
     expect(result.counterparty).toBeUndefined();
+  });
+
+  it('list surfaces the recipient @handle as counterparty for an internal_transfer (lockstep with getStatus)', async () => {
+    mockTransactionRepo.findByUserId.mockResolvedValue([
+      makeTransaction({
+        // The list response schema validates item.id as a uuid.
+        id: 'aaaaaaaa-0000-7000-8000-000000000009',
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          recipientUserId: 'recipient-user-2',
+          recipientHandle: '@ada',
+        },
+      }),
+    ]);
+
+    const result = await controller.list(TEST_USER);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].counterparty).toBe('@ada');
   });
 });
 

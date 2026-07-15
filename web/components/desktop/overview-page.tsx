@@ -33,7 +33,7 @@ export function OverviewPage({
   const assets = useWalletAssets()
   const activity = useActivityFeed()
   const queryClient = useQueryClient()
-  const { canSwap } = useCapabilities()
+  const { canSell } = useCapabilities()
 
   // One retry that re-fetches all three sections (the activity feed hook exposes
   // no refetch, so invalidation is the uniform path). Match by the key's first
@@ -108,7 +108,7 @@ export function OverviewPage({
     >
       <BalanceHero
         total={balanceData?.total ?? "—"}
-        canSwap={canSwap}
+        canSell={canSell}
         onQuickAction={onQuickAction}
       />
       <AssetsTable assets={assetData} />

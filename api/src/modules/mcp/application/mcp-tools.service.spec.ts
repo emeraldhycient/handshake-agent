@@ -646,6 +646,38 @@ describe('McpToolsService — transaction tools', () => {
     await close();
   });
 
+  it('get_transaction surfaces the recipient @handle as counterparty for an internal_transfer (direction out)', async () => {
+    // An internal transfer's metadata carries no address/destination — only the
+    // audit-snapshot recipientHandle. The projection must fall back to it so a
+    // settled transfer shows the recipient identity, not a blank counterparty.
+    const fakes = makeFakes();
+    fakes.transactionRepo.findById.mockResolvedValue({
+      id: TX_ID,
+      userId: USER_ID,
+      type: 'internal_transfer',
+      status: 'completed',
+      metadata: {
+        asset: 'USDT',
+        cryptoAmount: '3.00',
+        recipientUserId: 'recipient-user-2',
+        recipientHandle: '@ada',
+      },
+      createdAt: new Date('2026-07-08T10:00:00Z'),
+    });
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'get_transaction', {
+      transactionId: TX_ID,
+    });
+    const payload = payloadOf(result);
+    expect(payload).toMatchObject({
+      id: TX_ID,
+      type: 'internal_transfer',
+      direction: 'out',
+      counterparty: '@ada',
+    });
+    await close();
+  });
+
   it('list_pending_proposals lists lifecycle fields + web-app instruction — never raw parameters', async () => {
     const fakes = makeFakes();
     const { client, close } = await connect(makeService(fakes), ['read']);

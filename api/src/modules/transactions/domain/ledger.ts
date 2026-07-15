@@ -1161,3 +1161,83 @@ export function buildSwapRefundEntries(
 
   return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
 }
+
+// ---------------------------------------------------------------------------
+// Internal transfer ledger — single-phase (execute-time settlement between
+// two Handshake users' custodial user_wallet accounts, same asset)
+// ---------------------------------------------------------------------------
+
+/** Input to the pure internal-transfer ledger builder. */
+export interface BuildInternalTransferLedgerInput {
+  /** accountId for the sending user's user_wallet crypto account. */
+  senderWalletId: string;
+  /** accountId for the receiving user's user_wallet crypto account. */
+  recipientWalletId: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on both legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
+  /** Crypto amount moved from sender to recipient, as a decimal string. */
+  cryptoAmount: string;
+  postedAt: Date;
+  /**
+   * Current per-account state. Missing keys default to
+   * { sequence: 0, balance: '0' }.
+   */
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for an internal
+ * user-to-user TRANSFER (exactly 2 entries, same asset on both legs — no
+ * platform/treasury accounts are touched, unlike buy/sell/send/swap, because
+ * the crypto never leaves Handshake's custody, it only moves between two
+ * users' `user_wallet` ledger accounts).
+ *
+ * The function is pure: it reads prior account state from `input.accountStates`
+ * and computes the next `sequence` and `balanceAfter` values deterministically.
+ * The caller (execution engine) persists the returned rows inside a DB
+ * transaction after adding `id` and `transactionId`.
+ *
+ * Account mapping (credit positive, debit negative; per-currency sum = 0):
+ *  − user_wallet / senderWalletId    / asset  −cryptoAmount  (debited from sender)
+ *  + user_wallet / recipientWalletId / asset  +cryptoAmount  (credited to recipient)
+ */
+export function buildInternalTransferLedgerEntries(
+  input: BuildInternalTransferLedgerInput,
+): LedgerEntryDraft[] {
+  const {
+    senderWalletId,
+    recipientWalletId,
+    asset,
+    cryptoAmount,
+    postedAt,
+    accountStates,
+  } = input;
+
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+
+  const scaledCrypto = toScaled(cryptoAmount);
+  const posCrypto = fromScaled(scaledCrypto);
+  const negCrypto = fromScaled(-scaledCrypto);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: senderWalletId,
+      currency: asset,
+      amount: negCrypto,
+      description: `Internal transfer: ${asset} ${cryptoAmount} sent`,
+    },
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: recipientWalletId,
+      currency: asset,
+      amount: posCrypto,
+      description: `Internal transfer: ${asset} ${cryptoAmount} received`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}

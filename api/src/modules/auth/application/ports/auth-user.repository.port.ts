@@ -20,6 +20,8 @@ export interface MeProjection {
   /** Null when the user has no KYC profile yet. */
   firstName: string | null;
   lastName: string | null;
+  /** PayID handle for @-mention sends (Spec 2). Every user has one post-Task-3. */
+  payId: string | null;
 }
 
 export interface IAuthUserRepository {

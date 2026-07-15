@@ -17,6 +17,21 @@ export const SendDestinationInputSchema = z.object({
 })
 export type SendDestinationInput = z.infer<typeof SendDestinationInputSchema>
 
+// A Proposal's lifecycle status, mirroring the engine's ProposalStatus union
+// (api transaction.repository.port). Surfaced read-only on a persisted proposal
+// outcome so a reloaded card can render its terminal state ("Completed" /
+// "Cancelled") instead of a live, clickable quote whose confirm would 409.
+export const ProposalStatusSchema = z.enum([
+  'pending',
+  'confirmed',
+  'executing',
+  'executed',
+  'expired',
+  'rejected',
+  'failed',
+])
+export type ProposalStatus = z.infer<typeof ProposalStatusSchema>
+
 // Request body sent from the web chat UI to POST /agent/chat.
 export const ChatMessageRequestSchema = z
   .object({
@@ -121,6 +136,15 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
       SendProposalConfirmationSchema,
       SwapProposalConfirmationSchema,
     ]),
+    /**
+     * The proposal's CURRENT lifecycle status, injected on the HISTORY read
+     * (GET /chat/messages) only — a freshly-created proposal outcome omits it
+     * (it is `pending` by definition). Optional & backward-compatible: old
+     * persisted turns without it fall back to the live active/countdown card.
+     * When `executed`/`rejected`, the card renders a terminal, non-actionable
+     * state instead of a clickable quote whose confirm would 409 (Bug 2).
+     */
+    proposalStatus: ProposalStatusSchema.optional(),
   }),
   // balance is `kind` + the snapshot fields, merged so the discriminant stays
   // a direct member (z.discriminatedUnion requires the literal in each branch).

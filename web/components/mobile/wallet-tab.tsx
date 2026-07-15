@@ -14,17 +14,17 @@ const QUICK_ACTIONS: { action: ChatAction; glyph: string; label: string }[] = [
   { action: "buy", glyph: "+", label: "Buy" },
   { action: "send", glyph: "↗", label: "Send" },
   { action: "receive", glyph: "↓", label: "Receive" },
-  { action: "swap", glyph: "⇄", label: "Swap" },
+  { action: "sell", glyph: "−", label: "Sell" },
 ]
 
 export function WalletTab({ onQuickAction }: WalletTabProps) {
   const balancesQuery = useBalances()
   const assetsQuery = useWalletAssets()
-  const { canSwap } = useCapabilities()
-  // Swap is hidden until the crypto.swap capability is enabled in /config.
-  const actions = canSwap
+  const { canSell } = useCapabilities()
+  // Sell is hidden until the crypto.sell capability is enabled in /config.
+  const actions = canSell
     ? QUICK_ACTIONS
-    : QUICK_ACTIONS.filter((a) => a.action !== "swap")
+    : QUICK_ACTIONS.filter((a) => a.action !== "sell")
 
   if (balancesQuery.isLoading || assetsQuery.isLoading) {
     return (

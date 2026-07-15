@@ -19,6 +19,7 @@ import {
   WEB_CHAT_RATES_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
+import { HandleService } from '../../identity/application/handle.service';
 import { IDENTITY_REPOSITORY } from '../../identity/application/ports/identity.repository.port';
 import { CONVERSATION_REPOSITORY } from '../../conversations/application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from '../../conversations/application/ports/message.repository.port';
@@ -53,6 +54,9 @@ const fakeProposalService = {
   createSellProposal: jest.fn(),
   createSendProposal: jest.fn(),
   createSwapProposal: jest.fn(),
+  // Bug 2: read-only lookup of a proposal's CURRENT lifecycle status, used by
+  // the history read to render an executed proposal's card as terminal.
+  getProposalStatus: jest.fn(),
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = {
@@ -60,6 +64,10 @@ const fakeBeneficiaryService = {
   resolveByNickname: jest.fn(),
   listForUser: jest.fn(),
 };
+// Global handle resolver (Task 4): turns an `@handle` into a userId + display
+// name, or null on a miss. Injected so `@`-prefixed crypto sends route to the
+// internal-transfer resolver (Task 9), never the saved-nickname/default path.
+const fakeHandleService = { resolveHandle: jest.fn() };
 const fakeHistoryService = { query: jest.fn() };
 const fakeBalanceService = { getBalances: jest.fn() };
 const fakeRatesService = {
@@ -228,6 +236,7 @@ describe('WebChatService', () => {
         { provide: AssetRegistry, useValue: fakeAssetRegistry },
         { provide: StatementTokenService, useValue: fakeStatementTokens },
         { provide: EffectiveConfigService, useValue: fakeConfig },
+        { provide: HandleService, useValue: fakeHandleService },
       ],
     }).compile();
 
@@ -2043,6 +2052,81 @@ describe('WebChatService', () => {
       expect(result.messages[0].outcome).toEqual(storedOutcome);
     });
 
+    // ── proposal outcome: current status is injected on reload (Bug 2) ─────────
+
+    const validBuyConfirmation = {
+      proposalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      asset: 'USDT',
+      fiatAmount: '5000',
+      fiatCurrency: 'NGN',
+      cryptoAmount: '4.5',
+      fxRate: '1110',
+      spreadBps: 50,
+      processingFeeBps: 30,
+      processingFeeAmount: '15',
+      totalFiat: '5015',
+      expiresAt: '2026-06-29T12:00:00.000Z',
+    };
+
+    it("enriches a stored proposal outcome with the proposal's CURRENT status (Bug 2)", async () => {
+      // The persisted outcome was captured at proposal-CREATION and has no
+      // execution status. On reload the history read must look up the proposal's
+      // CURRENT status so an already-executed proposal renders a terminal card,
+      // never a live quote whose confirm would 409.
+      const storedProposalOutcome = {
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        confirmation: validBuyConfirmation,
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'buy 5000 NGN of USDT',
+          createdAt: new Date('2026-07-08T10:00:00.000Z'),
+          reply: { text: 'Ready to confirm', outcome: storedProposalOutcome },
+        },
+      ]);
+      fakeProposalService.getProposalStatus.mockResolvedValue('executed');
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+
+      expect(fakeProposalService.getProposalStatus).toHaveBeenCalledWith(
+        'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      );
+      const outcome = result.messages[0].outcome as {
+        kind: 'proposal';
+        proposalStatus?: string;
+      };
+      expect(outcome.kind).toBe('proposal');
+      expect(outcome.proposalStatus).toBe('executed');
+    });
+
+    it('leaves a proposal outcome un-enriched when the proposal is gone (null status)', async () => {
+      const storedProposalOutcome = {
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        confirmation: validBuyConfirmation,
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'buy 5000 NGN of USDT',
+          createdAt: new Date('2026-07-08T10:00:00.000Z'),
+          reply: { text: 'Ready to confirm', outcome: storedProposalOutcome },
+        },
+      ]);
+      fakeProposalService.getProposalStatus.mockResolvedValue(null);
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+
+      const outcome = result.messages[0].outcome as {
+        proposalStatus?: string;
+      };
+      expect(outcome.proposalStatus).toBeUndefined();
+    });
+
     // ── transactions outcome: stale signed download URL is re-issued ───────────
 
     it('re-issues a fresh signed downloadUrl for a stored transactions outcome', async () => {
@@ -2545,6 +2629,155 @@ describe('WebChatService', () => {
           "You have 2 saved recipients called 'mum'. Which one did you mean?",
       });
       expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    // ── Task 9 — @handle → internal-transfer resolver ────────────────────────
+    // An `@`-prefixed recipientNickname is a PUBLIC handle, resolved via the
+    // global HandleService (Task 4) to an internal_user destination — NOT a
+    // private saved-beneficiary lookup. A miss surfaces a clarification and
+    // NEVER falls through to the nickname/default path (§3.1 NO-MISROUTE).
+    it('an @handle that resolves routes to an internal_user destination — never the saved-nickname/default path', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue({
+        userId: 'user-ada',
+        displayName: 'Ada I.',
+        handle: 'ada',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        '@ada',
+        'send 50 USDT to @ada',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: {
+          kind: 'internal_user',
+          recipientUserId: 'user-ada',
+          displayHandle: '@ada',
+          recipientDisplayName: 'Ada I.',
+        },
+      });
+      expect(fakeHandleService.resolveHandle).toHaveBeenCalledWith('@ada');
+      // The private saved-nickname path must NOT run for an @handle.
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('an @handle that resolves to NOBODY returns a clarification — never resolveByNickname/getDefault (§3.1 NO-MISROUTE)', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue(null);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        '@nobody',
+        'send 50 USDT to @nobody',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: { kind: 'clarification' },
+      });
+      if (r.resolved) throw new Error('expected an unresolved outcome');
+      expect(r.outcome).toHaveProperty('kind', 'clarification');
+      if (r.outcome.kind !== 'clarification') {
+        throw new Error('expected a clarification outcome');
+      }
+      // Pin the user-facing contract string (§3.1 no-misroute): must name the
+      // handle the user typed and tell them to double-check it.
+      expect(r.outcome.text).toContain('@nobody');
+      expect(r.outcome.text).toContain('double-check the handle');
+      // The miss must NOT fall through to the private-nickname or default path.
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    // ── Fix 1/3 — whitespace-prefixed/bare @handles still route to the handle
+    //    rail, never the private-nickname path or the silent default.
+    it.each(['@', '@ '])(
+      '%j (bare/blank sigil) routes into the @-branch and returns a clarification, never getDefault/resolveByNickname',
+      async (nickname) => {
+        fakeHandleService.resolveHandle.mockResolvedValue(null);
+        const r = await service.resolveSendDestination(
+          'user-1',
+          {},
+          nickname,
+          `send 50 USDT to ${nickname}`,
+        );
+        expect(r).toMatchObject({
+          resolved: false,
+          outcome: { kind: 'clarification' },
+        });
+        expect(fakeHandleService.resolveHandle).toHaveBeenCalledWith(nickname);
+        expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+        expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a leading-whitespace @handle (" @ada") routes to resolveHandle (handle rail), NOT resolveByNickname', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue({
+        userId: 'user-ada',
+        displayName: 'Ada I.',
+        handle: 'ada',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        ' @ada',
+        'send 50 USDT to  @ada',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: {
+          kind: 'internal_user',
+          recipientUserId: 'user-ada',
+          displayHandle: '@ada',
+          recipientDisplayName: 'Ada I.',
+        },
+      });
+      // The trimmed handle is what's passed to the resolver.
+      expect(fakeHandleService.resolveHandle).toHaveBeenCalledWith('@ada');
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('a self-send @handle (resolves to the sender) returns a clarification, no destination', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue({
+        userId: 'user-1',
+        displayName: 'You',
+        handle: 'me',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        '@me',
+        'send 50 USDT to @me',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: { kind: 'clarification' },
+      });
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('a plain nickname (no @) routes to the saved-beneficiary path UNCHANGED — resolveHandle is never consulted', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        { id: 'ben-mum' },
+      ]);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: 'ben-mum' },
+      });
+      expect(fakeBeneficiaryService.resolveByNickname).toHaveBeenCalledWith(
+        'user-1',
+        'crypto_address',
+        'mum',
+      );
+      expect(fakeHandleService.resolveHandle).not.toHaveBeenCalled();
     });
   });
 

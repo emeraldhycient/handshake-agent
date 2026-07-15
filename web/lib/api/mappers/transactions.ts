@@ -10,7 +10,13 @@ import type { ActivityGroup, ActivityItem, StatusTone } from "@/lib/schemas"
  *  (never hardcoded here — multi-currency aware, root §13). */
 export type FiatSymbols = Record<string, string>
 
-const OUT_TYPES = new Set(["sell", "send"])
+// `internal_transfer` is an outflow HERE because today only the SENDER gets a
+// Transaction row — the recipient-side row is a deferred follow-up. When
+// recipient rows are added, `internal_transfer` direction must become
+// per-viewer (from the API's per-row `direction`, or the ledger leg relative to
+// the viewer), NOT this static type map — otherwise the recipient's inflow
+// would render as a debit. Don't extend this Set to cover that case.
+const OUT_TYPES = new Set(["sell", "send", "internal_transfer"])
 const IN_TYPES = new Set([
   "buy",
   "receive",
@@ -25,6 +31,8 @@ type Dir = ActivityItem["dir"]
 function dirFor(type: string): Dir {
   if (type === "ticket_purchase") return "ticket"
   if (OUT_TYPES.has(type)) return "out"
+  // IN_TYPES is the explicit inflow set; any unclassified type also defaults to
+  // an inflow (the safe display fallback for a new read-only type).
   return IN_TYPES.has(type) ? "in" : "in"
 }
 
@@ -39,6 +47,9 @@ const TITLE: Record<string, (asset?: string) => string> = {
   buy: (a) => `Bought ${a ?? "crypto"}`,
   sell: (a) => `Sold ${a ?? "crypto"}`,
   send: (a) => `Sent ${a ?? "crypto"}`,
+  // Sender-side internal (PayID) transfer — same "Sent" framing as an on-chain
+  // send so the outflow reads consistently (see OUT_TYPES per-viewer caveat).
+  internal_transfer: (a) => `Sent ${a ?? "crypto"}`,
   receive: (a) => `Received ${a ?? "crypto"}`,
   deposit: (a) => `Deposit ${a ?? ""}`.trim(),
   ticket_purchase: () => "Ticket",
@@ -72,7 +83,10 @@ function groupLabel(d: Date, now: Date): string {
   const y = new Date(now)
   y.setDate(now.getDate() - 1)
   if (sameDay(d, y)) return "Yesterday"
-  return d.toLocaleDateString(DISPLAY_LOCALE, { day: "numeric", month: "short" })
+  return d.toLocaleDateString(DISPLAY_LOCALE, {
+    day: "numeric",
+    month: "short",
+  })
 }
 
 function timeLabel(d: Date): string {

@@ -30,6 +30,7 @@ import type { CatalogConfig } from '../../../core/config/configuration';
 import { SanctionsScreeningUnavailableError } from '../domain/compliance-errors';
 import type {
   ISanctionsScreener,
+  SanctionsScreenIdentityInput,
   SanctionsScreenInput,
   SanctionsScreenResult,
 } from '../application/ports/sanctions-screener.port';
@@ -110,6 +111,35 @@ export class BlockradarAmlScreener implements ISanctionsScreener {
       provider: 'blockradar',
       reference,
     };
+  }
+
+  /**
+   * Identity screen for internal-transfer counterparties (Task 8).
+   *
+   * Blockradar performs on-chain ADDRESS AML only — it has no name/entity
+   * screening capability — so there is no endpoint to call for a userId, and
+   * an internal transfer has no destination address to look up. This returns a
+   * safe pass-through: it MUST NOT call `resolveBlockchain` (which fail-closes
+   * on any unmapped network, e.g. a fake "internal") and MUST NOT throw. A
+   * capability the provider fundamentally lacks is not a "screening failure",
+   * so fail-closed would be wrong here — it would unconditionally break every
+   * internal transfer AND skip the always-write ComplianceEvent. Pass-through
+   * is correct: the counterparty is a KYC-verified platform user who was
+   * sanctions-screened at onboarding. The `provider` marker makes the gap
+   * explicit in the persisted audit trail.
+   *
+   * TODO(HSK-COMPLIANCE-IDSCREEN): wire a name/entity sanctions provider for
+   * counterparty-user screening (a real name-screening integration such as
+   * OpenSanctions/TRM entity search — separate from address AML).
+   */
+  screenIdentity(
+    input: SanctionsScreenIdentityInput,
+  ): Promise<SanctionsScreenResult> {
+    return Promise.resolve({
+      passed: true,
+      provider: 'blockradar-aml:identity-screen-unsupported',
+      reference: input.reference ?? randomUUID(),
+    });
   }
 
   // ---------------------------------------------------------------------------

@@ -71,8 +71,11 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
     // (Track A durable-webhook queue). The fiat_currency enum-widen (go-readiness #8)
     // adds VALUES, not a table, so it does not affect this count. +2 for recon_runs
     // + recon_breaks (go-readiness #3 durable recon log). +1 for
-    // personal_access_tokens (go-live Wave C — PAT/MCP surface).
-    expect(Number(tables)).toBe(63);
+    // personal_access_tokens (go-live Wave C — PAT/MCP surface). +1 for
+    // public_aliases (Spec 2 — PayID public-nickname registry). The internal-transfer
+    // proposal_type/transaction_type additions are ALTER TYPE ... ADD VALUE (enum
+    // VALUES on existing types), not new tables, so they do not affect this count.
+    expect(Number(tables)).toBe(64);
 
     const [{ enums }] = await prisma.$queryRawUnsafe<{ enums: bigint }[]>(
       `SELECT count(DISTINCT t.typname)::bigint AS enums

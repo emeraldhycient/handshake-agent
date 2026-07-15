@@ -427,6 +427,82 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 60_000);
 
   // ===========================================================================
+  // PAYID (Task 3) — minted at signup, surfaced via GET /auth/me
+  // ===========================================================================
+
+  it('signup mints a PayID and surfaces it on GET /auth/me; two users sharing an email local-part get DIFFERENT payIds (collision suffix)', async () => {
+    const stamp = Date.now();
+    const emailA = `payid_dup_${stamp}@test-domain-a.com`;
+    const emailB = `payid_dup_${stamp}@test-domain-b.com`;
+
+    // Signup + verify + login user A, then read their payId via /auth/me.
+    const signupA = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email: emailA, phone: '+2348012223330' })
+      .expect(202);
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: (signupA.body as { devToken: string }).devToken })
+      .expect(200);
+    const lrA = await request(app.getHttpServer())
+      .post('/auth/login/request')
+      .send({ email: emailA })
+      .expect(202);
+    const lvA = await request(app.getHttpServer())
+      .post('/auth/login/verify')
+      .send({
+        email: emailA,
+        otp: (lrA.body as { devOtp: string }).devOtp,
+        deviceFingerprint: 'e2e-payid-fp-a',
+      })
+      .expect(200);
+    const meA = await request(app.getHttpServer())
+      .get('/auth/me')
+      .set(
+        'Authorization',
+        `Bearer ${(lvA.body as { accessToken: string }).accessToken}`,
+      )
+      .expect(200);
+    const payIdA = (meA.body as { payId: string }).payId;
+    expect(payIdA).toMatch(/^[a-z0-9_]{3,30}$/);
+
+    // Signup + verify + login user B — same local-part ("payid_dup_<stamp>"),
+    // a different domain, so it collides on the derived slug and must fall
+    // back to a suffixed candidate rather than a duplicate/rejected write.
+    const signupB = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email: emailB, phone: '+2348012223331' })
+      .expect(202);
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: (signupB.body as { devToken: string }).devToken })
+      .expect(200);
+    const lrB = await request(app.getHttpServer())
+      .post('/auth/login/request')
+      .send({ email: emailB })
+      .expect(202);
+    const lvB = await request(app.getHttpServer())
+      .post('/auth/login/verify')
+      .send({
+        email: emailB,
+        otp: (lrB.body as { devOtp: string }).devOtp,
+        deviceFingerprint: 'e2e-payid-fp-b',
+      })
+      .expect(200);
+    const meB = await request(app.getHttpServer())
+      .get('/auth/me')
+      .set(
+        'Authorization',
+        `Bearer ${(lvB.body as { accessToken: string }).accessToken}`,
+      )
+      .expect(200);
+    const payIdB = (meB.body as { payId: string }).payId;
+    expect(payIdB).toMatch(/^[a-z0-9_]{3,30}$/);
+
+    expect(payIdB).not.toBe(payIdA);
+  }, 60_000);
+
+  // ===========================================================================
   // LEGACY link flow still passes (kept for backward-compat, Task 2.2 is additive)
   // ===========================================================================
 

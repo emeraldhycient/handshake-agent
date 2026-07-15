@@ -143,6 +143,34 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
+  it("threads a rehydrated proposalStatus onto the quote card (Bug 2)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "buy",
+      proposalId: buyConfirmation.proposalId,
+      confirmation: buyConfirmation,
+      proposalStatus: "executed",
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      proposalStatus: "executed",
+    })
+  })
+
+  it("leaves proposalStatus undefined on a live proposal (no status field)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "buy",
+      proposalId: buyConfirmation.proposalId,
+      confirmation: buyConfirmation,
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(
+      (messages[0] as { proposalStatus?: string }).proposalStatus
+    ).toBeUndefined()
+  })
+
   it("buy quote rows drive the symbol from the confirmation's fiatCurrency, never a hardcoded ₦", () => {
     // §3.1 confirmation integrity: a GHS-settled buy must render GH₵ on every
     // fiat row — the sell branch already keys off fiatCurrency; buy must too.
@@ -199,7 +227,7 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
-  it("maps a send proposal to a quote card", () => {
+  it("maps an on-chain send proposal to a quote card with the masked address + fee row (unchanged)", () => {
     const outcome: AgentTurnOutcome = {
       kind: "proposal",
       txType: "send",
@@ -217,7 +245,82 @@ describe("mapOutcomeToMessages", () => {
     }
     const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
     expect(proposalId).toBe("33333333-3333-3333-3333-333333333333")
-    expect(messages[0]).toMatchObject({ kind: "quote", action: "send" })
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      action: "send",
+      rows: [
+        { label: "To", value: "TX1234...abcd" },
+        { label: "Network", value: "TRON" },
+        { label: "Network fee", value: "1 USDT" },
+      ],
+      totalLabel: "Total debit",
+      totalValue: "6 USDT",
+    })
+  })
+
+  it("maps an internal-transfer send proposal to a quote card showing the recipient name + @handle (single '@', never '@@') and an instant/no-fee row (never a masked address or a '0 USDT' fee line)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "send",
+      proposalId: "55555555-5555-5555-5555-555555555555",
+      confirmation: {
+        proposalId: "55555555-5555-5555-5555-555555555555",
+        asset: "USDT",
+        cryptoAmount: "10",
+        network: "TRON",
+        networkFeeCrypto: "0",
+        totalDebit: "10",
+        recipientDisplayName: "Ada T.",
+        // The resolver's displayHandle already carries the '@' sigil
+        // (recipientHandle: destination.displayHandle === '@' + hit.handle,
+        // per proposal.service.ts) — this is the real shape sent over the
+        // wire, not a bare handle.
+        recipientHandle: "@adat",
+        instant: true,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      },
+    }
+    const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
+    expect(proposalId).toBe("55555555-5555-5555-5555-555555555555")
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      action: "send",
+      rows: [
+        { label: "To", value: "Ada T. · @adat" },
+        { label: "Delivery", value: "Instant · No network fee" },
+      ],
+      totalLabel: "Total debit",
+      totalValue: "10 USDT",
+    })
+    const row = (messages[0] as { rows: Array<{ label: string }> }).rows.find(
+      (r) => r.label === "Network fee"
+    )
+    expect(row).toBeUndefined()
+  })
+
+  it("normalizes a bare recipientHandle (no leading '@') to exactly one '@', proving the fix is idempotent either way", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "send",
+      proposalId: "66666666-6666-6666-6666-666666666666",
+      confirmation: {
+        proposalId: "66666666-6666-6666-6666-666666666666",
+        asset: "USDT",
+        cryptoAmount: "10",
+        network: "TRON",
+        networkFeeCrypto: "0",
+        totalDebit: "10",
+        recipientDisplayName: "Ada T.",
+        recipientHandle: "adat",
+        instant: true,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      },
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    const toRow = (
+      messages[0] as { rows: Array<{ label: string; value: string }> }
+    ).rows.find((r) => r.label === "To")
+    expect(toRow?.value).toBe("Ada T. · @adat")
   })
 
   it("maps a swap proposal to a swap card message and returns its proposalId", () => {

@@ -157,4 +157,47 @@ describe('MockSanctionsScreener', () => {
       expect(r1.reference).not.toBe(r2.reference);
     });
   });
+
+  // ── Identity screen (counterparty-user path, Task 8 fix) ──────────────────
+  // Reuses the SAME denylist config as address screening, but keys on userId —
+  // so a test forces a block by denylisting the counterparty's userId.
+  describe('screenIdentity', () => {
+    const CLEAN_USER_ID = 'user-clean-001';
+    const BLOCKED_USER_ID = 'user-sanctioned-999';
+
+    it('passes a clean userId not on the denylist', async () => {
+      const screener = makeScreener([BLOCKED_USER_ID]);
+
+      const result = await screener.screenIdentity({ userId: CLEAN_USER_ID });
+
+      expect(result.passed).toBe(true);
+      expect(result.reason).toBeUndefined();
+      expect(result.provider).toBe('mock');
+      expect(result.reference).toMatch(/^mock-sanctions-/);
+    });
+
+    it('blocks a userId present in the denylist', async () => {
+      const screener = makeScreener([BLOCKED_USER_ID]);
+
+      const result = await screener.screenIdentity({
+        userId: BLOCKED_USER_ID,
+      });
+
+      expect(result.passed).toBe(false);
+      expect(result.reason).toBe('sanctioned identity');
+      expect(result.provider).toBe('mock');
+      expect(result.reference).toMatch(/^mock-sanctions-/);
+    });
+
+    it('uses a caller-supplied reference when provided', async () => {
+      const screener = makeScreener([BLOCKED_USER_ID]);
+
+      const result = await screener.screenIdentity({
+        userId: CLEAN_USER_ID,
+        reference: 'caller-ref-123',
+      });
+
+      expect(result.reference).toBe('caller-ref-123');
+    });
+  });
 });

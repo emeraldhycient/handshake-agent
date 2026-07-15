@@ -156,8 +156,12 @@ export class ProposalController {
   ): Promise<AuthorizeProposalResponse> {
     const proposal = await this.loadExecutable(proposalId, user.userId);
 
-    // send requires a step-up directive; buy/sell use PIN.
-    const ref = proposal.type === 'send' ? 'request_step_up' : 'request_pin';
+    // send + internal_transfer require a step-up directive (both are irreversible
+    // value moves — §3.4); buy/sell/swap use PIN.
+    const ref =
+      proposal.type === 'send' || proposal.type === 'internal_transfer'
+        ? 'request_step_up'
+        : 'request_pin';
 
     const { directiveId, nonce, expiresAt } = await this.directiveService.issue(
       {
@@ -256,6 +260,34 @@ export class ProposalController {
           transactionId: result.transactionId,
           status: result.status,
           onChain: { providerRef: result.onChain.providerRef },
+        };
+      }
+
+      if (proposalType === 'internal_transfer') {
+        // Internal transfer uses step-up authorization (parity with send, §3.4).
+        // Resolve the acting device from the client fingerprint so the step-up is
+        // bound to it; falls back to the user's pinned device when unresolved.
+        const deviceId =
+          (await this.sessionService.findDeviceIdByFingerprint(
+            user.userId,
+            body.deviceFingerprint,
+          )) ?? undefined;
+
+        // idempotencyKey = proposalId (I8 at-most-once). The body-supplied key is
+        // never trusted here — a retry must collapse onto the engine's
+        // findByIdempotencyKey check, not mint a second real-money transfer.
+        const result = await this.executionService.executeInternalTransfer({
+          userId: user.userId,
+          proposalId,
+          directiveId: body.directiveId,
+          nonce: body.nonce,
+          pin: body.pin,
+          idempotencyKey,
+          deviceId,
+        });
+        return {
+          transactionId: result.transactionId,
+          status: result.status,
         };
       }
 
@@ -408,7 +440,10 @@ export class TransactionStatusController {
       const str = (k: string) =>
         typeof meta[k] === 'string' ? meta[k] : undefined;
       const counterparty =
-        str('destination') ?? str('counterparty') ?? str('senderAddress');
+        str('destination') ??
+        str('counterparty') ??
+        str('senderAddress') ??
+        str('recipientHandle');
       // Deposits store the amount under `amount`; trades use `cryptoAmount`.
       const cryptoAmt = str('cryptoAmount') ?? str('amount');
       return {
@@ -468,13 +503,17 @@ export class TransactionStatusController {
       ? 'in'
       : 'out';
 
-    // Counterparty: prefer destination (send), then senderAddress (deposit).
+    // Counterparty: prefer destination (send), then senderAddress (deposit),
+    // then recipientHandle (internal transfer — no address/destination to show).
+    // Kept in lockstep with the list projection above + the MCP surface.
     const counterparty =
       typeof meta.destination === 'string'
         ? meta.destination
         : typeof meta.senderAddress === 'string'
           ? meta.senderAddress
-          : undefined;
+          : typeof meta.recipientHandle === 'string'
+            ? meta.recipientHandle
+            : undefined;
 
     // On-chain fields — present for deposits (from Blockradar webhook) and sends.
     const txHash = typeof meta.txHash === 'string' ? meta.txHash : undefined;

@@ -24,6 +24,7 @@ import type {
   PricingFeedConfig,
   ComplianceConfig,
   SwapConfig,
+  CatalogConfig,
 } from '../../../core/config/configuration';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
@@ -61,7 +62,10 @@ import {
 } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import { ComplianceService } from '../../compliance/application/compliance.service';
-import type { IProposalRepository } from './ports/proposal.repository.port';
+import type {
+  IProposalRepository,
+  ProposalStatus,
+} from './ports/proposal.repository.port';
 import { PROPOSAL_REPOSITORY } from './ports/proposal.repository.port';
 import type { IQuoteRepository } from './ports/quote.repository.port';
 import { QUOTE_REPOSITORY } from './ports/quote.repository.port';
@@ -111,9 +115,17 @@ export type SendDestination =
       address: string;
       network: string;
       save?: { label?: string };
+    }
+  // Internal (user→user, PayID) transfer — the destination is RESOLVED
+  // server-side (Task 9), never supplied by the model (§3.1). `recipientUserId`
+  // + `displayHandle` come from the handle resolver; `recipientDisplayName` is
+  // the counterparty's resolved KYC name for the itemized confirmation.
+  | {
+      kind: 'internal_user';
+      recipientUserId: string;
+      displayHandle: string;
+      recipientDisplayName: string;
     };
-// reserved for Spec 2 (do NOT implement now):
-// | { kind: 'internal_user'; recipientUserId: string; displayHandle: string };
 
 export interface CreateSendProposalInput {
   userId: string;
@@ -329,6 +341,70 @@ export class ProposalService {
     if (max !== null && toScaled(fiatValue) > toScaled(max)) {
       throw new AmountTooLargeError(capability, fiatValue, max, fiatCurrency);
     }
+  }
+
+  /**
+   * Resolves the base-fiat (NGN) equivalent of a crypto amount for the KYC /
+   * velocity money gate — BigInt-exact, fail-closed on a 0/negative/missing
+   * baseRate (a zeroed fiat-equivalent would silently bypass the gate, §3.1/§3.3).
+   *
+   * This ~40-line money-math block is correctness-critical and was previously
+   * inline in the on-chain send path; the internal-transfer path needs the exact
+   * same computation, so it lives here ONCE — two copies could silently drift
+   * (§13.2). Returns the resolved base fiat, the effective baseRate (kept so the
+   * send path can compute its Travel-Rule fiat value without re-resolving), and
+   * the exact NGN-equivalent decimal string.
+   */
+  private resolveGateFiatEquivalent(
+    asset: string,
+    cryptoAmount: string,
+  ): { baseFiat: string; baseRate: number; ngnEquivalent: string } {
+    // baseRate is a whole-or-fractional NGN-per-asset rate from config (e.g. 1600).
+    const pricingConfig = this.configService.get<PricingConfig>('pricing');
+    const baseFiat = this.assetRegistry.defaultFiat();
+    // Fail closed on a missing / 0 / negative baseRate via the shared guard: a
+    // zero rate would zero the fiat-equivalent and silently bypass the KYC /
+    // velocity / Travel-Rule gate. Same guard as ExecutionService.
+    const baseRate = resolveEffectiveBaseRate(
+      pricingConfig,
+      this.effectiveLiveStore(),
+      asset,
+      baseFiat,
+      this.clock.now(),
+      this.feedStalenessSec(),
+    );
+    // Exact decimal multiplication: cryptoAmount × baseRate. Both operands scaled
+    // to 10^18 bigints, divided by SCALE once, staying in the 10^18 unit space —
+    // handles fractional baseRates (e.g. 1600.45) exactly, no Math.round drift.
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledCrypto = toScaled(cryptoAmount);
+    const scaledNgn18 =
+      (scaledCrypto * toScaled(String(baseRate))) / LEDGER_SCALE;
+    // Reconstruct decimal string from the 10^18-scaled bigint (mirrors fromScaled).
+    const isNegNgn = scaledNgn18 < 0n;
+    const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;
+    const wholeNgn = absNgn / LEDGER_SCALE;
+    const fracNgn = absNgn % LEDGER_SCALE;
+    const fracNgnStr =
+      fracNgn === 0n
+        ? ''
+        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalent =
+      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
+    return { baseFiat, baseRate, ngnEquivalent };
+  }
+
+  /**
+   * Read-only lookup of a proposal's CURRENT lifecycle status (Bug 2).
+   * Returns null when the proposal no longer exists. Used by the web chat
+   * history read to render an already-executed / rejected proposal's card as a
+   * terminal state instead of a live, clickable quote whose confirm would 409.
+   * NEVER mutates — the §3.1 model-proposes/engine-disposes invariant is intact
+   * (this only reads proposal state, it does not authorize or execute).
+   */
+  async getProposalStatus(proposalId: string): Promise<ProposalStatus | null> {
+    const record = await this.proposalRepo.findById(proposalId);
+    return record ? record.status : null;
   }
 
   async createBuyProposal(
@@ -648,6 +724,22 @@ export class ProposalService {
     input: CreateSendProposalInput,
   ): Promise<CreateSendProposalOutput> {
     const { userId, conversationId, intent, destination } = input;
+
+    // Internal (user→user, PayID) transfer diverges at nearly every step — no
+    // network fee, no address, self-send by userId, counterparty-user sanctions,
+    // a different proposal type + confirmation — so dispatch to a focused method
+    // and leave the on-chain send flow below byte-for-byte unchanged. Narrowing
+    // on the `destination` const also keeps the raw_address `else` branch below
+    // correctly typed (internal_user can never reach it).
+    if (destination.kind === 'internal_user') {
+      return this.createInternalTransferProposal({
+        userId,
+        conversationId,
+        intent,
+        destination,
+      });
+    }
+
     const now = this.clock.now();
 
     // 0. Amount-floor guard (finding #4) — BEFORE quoting / balance / gate.
@@ -700,51 +792,13 @@ export class ProposalService {
     }
 
     // 4. KYC/velocity gate on the NGN-equivalent value of the send (§3.3).
-    // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
-    // baseRate is a whole-number NGN-per-USDT rate from config (e.g. 1600).
-    // cryptoAmount × baseRate is computed as:
-    //   scaledNgn = toScaled(cryptoAmount) × BigInt(baseRate) / SCALE
-    // where SCALE = 10^18. This gives the NGN value scaled to 10^18 units,
-    // then we convert back to a decimal string for the gate.
-    const pricingConfig = this.configService.get<PricingConfig>('pricing');
-    const baseFiat = this.assetRegistry.defaultFiat();
-    // Fail closed on a missing / 0 / negative baseRate via the shared guard: a
-    // zero rate would zero the fiat-equivalent and silently bypass the KYC /
-    // velocity / Travel-Rule gate (§3.1 / §3.3). Same guard as ExecutionService.
-    const baseRate = resolveEffectiveBaseRate(
-      pricingConfig,
-      this.effectiveLiveStore(),
-      intent.asset,
+    // Fix-C: BigInt-exact NGN equivalent via the shared helper (also fail-closes
+    // on a 0/negative baseRate). baseRate is kept for the Travel-Rule fiat value.
+    const {
       baseFiat,
-      this.clock.now(),
-      this.feedStalenessSec(),
-    );
-    // Compute NGN equivalent: cryptoAmount × baseRate, BigInt-exact (Fix-C).
-    // baseRate is an integer NGN-per-USDT rate from config (e.g. 1600).
-    // toScaled(cryptoAmount) returns the 10^18-scaled representation of cryptoAmount.
-    // Multiplying by baseRate (an integer) gives the result in units of
-    //   10^18 × NGN/USDT × USDT = 10^18 × NGN
-    // i.e. the NGN amount already scaled to 10^18, exactly as toScaled() outputs
-    // for a regular NGN amount — so we can feed it directly to the gate via
-    // fromScaled-equivalent string conversion.
-    const LEDGER_SCALE = 10n ** 18n;
-    const scaledCrypto = toScaled(intent.cryptoAmount);
-    // Exact decimal multiplication: multiply both operands as 10^18-scaled bigints
-    // then divide by SCALE once to stay in the 10^18 unit space.
-    // This handles fractional baseRates (e.g. 1600.45) exactly — no Math.round.
-    const scaledNgn18 =
-      (scaledCrypto * toScaled(String(baseRate))) / LEDGER_SCALE;
-    // Reconstruct decimal string from 10^18-scaled bigint (mirrors fromScaled in ledger.ts).
-    const isNegNgn = scaledNgn18 < 0n;
-    const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;
-    const wholeNgn = absNgn / LEDGER_SCALE;
-    const fracNgn = absNgn % LEDGER_SCALE;
-    const fracNgnStr =
-      fracNgn === 0n
-        ? ''
-        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
-    const ngnEquivalentStr =
-      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
+      baseRate,
+      ngnEquivalent: ngnEquivalentStr,
+    } = this.resolveGateFiatEquivalent(intent.asset, intent.cryptoAmount);
 
     await this.kycGate.assertCanTransact({
       userId,
@@ -894,6 +948,169 @@ export class ProposalService {
       totalDebit,
       toAddressMasked,
       beneficiaryLabel: beneficiaryLabel ?? undefined,
+      expiresAt: expiresAt.toISOString(),
+    });
+
+    return { proposalId, quoteId: null, confirmation };
+  }
+
+  /**
+   * Internal (user→user, PayID) transfer proposal — Task 6, PRD §4 / §3.1.
+   *
+   * A ledger-only transfer between two custodial users: NO on-chain send, NO
+   * network fee, NO destination address. The model never supplies the
+   * destination — `recipientUserId` + `displayHandle` are resolved server-side
+   * (Task 9) and handed in. Flow (ALL guards BEFORE persisting — §3.1):
+   *   a. Amount-floor / dust guard (same concern as a send; no fee-coverage
+   *      guard — the fee is 0).
+   *   b. Resolve the SENDER wallet for the asset's default network.
+   *   c. Self-send guard FIRST (by userId) — before provisioning the recipient.
+   *   d. Resolve (auto-provision) the RECIPIENT wallet on the same network.
+   *   e. No network fee: networkFeeCrypto='0', totalDebit === cryptoAmount.
+   *   f. Balance check: sender ledger balance ≥ totalDebit.
+   *   g. KYC/velocity gate on the base-fiat-equivalent — onChainSend:false (no
+   *      on-chain per-send cap), capability 'crypto.transfer' (tier_2, §3.3).
+   *   h. Counterparty-USER sanctions screening (by identity, not address).
+   *   i. Travel Rule does NOT apply — within-custodian (both parties are our
+   *      KYC'd users, no external VASP): requiresTravelRule=false.
+   *   j. Persist Proposal(type=internal_transfer, pending; no Quote row, no
+   *      toAddress, no beneficiaryId).
+   *   k. Return { proposalId, quoteId: null, confirmation } — instant, no address.
+   */
+  private async createInternalTransferProposal(input: {
+    userId: string;
+    conversationId?: string;
+    intent: SendCryptoIntent;
+    destination: Extract<SendDestination, { kind: 'internal_user' }>;
+  }): Promise<CreateSendProposalOutput> {
+    const { userId, conversationId, intent, destination } = input;
+    const now = this.clock.now();
+
+    // a. Amount-floor / dust guard — same concern as a send. NO fee-coverage
+    // guard: an internal transfer has no network fee to dwarf the amount.
+    this.assertCryptoAmountAtLeastMin(
+      'send',
+      intent.cryptoAmount,
+      intent.asset,
+    );
+
+    // b. Resolve the SENDER wallet on the asset's default network.
+    const network = this.assetRegistry.defaultNetworkFor(intent.asset);
+    const senderWallet = await this.walletService.getOrProvisionNetworkWallet(
+      userId,
+      network,
+    );
+
+    // c. Self-send guard FIRST — by userId, BEFORE provisioning the recipient
+    // wallet (a transfer to yourself is a no-op; §3.1). Reject as SELF_SEND_BLOCKED.
+    if (destination.recipientUserId === userId) {
+      throw new SelfSendError();
+    }
+
+    // d. Resolve (auto-provision if absent) the RECIPIENT wallet — same network.
+    const recipientWallet =
+      await this.walletService.getOrProvisionNetworkWallet(
+        destination.recipientUserId,
+        network,
+      );
+
+    // e. No network fee for an internal ledger transfer.
+    const networkFeeCrypto = '0';
+    const totalDebit = intent.cryptoAmount;
+
+    // f. Balance check — ledger is authoritative; sender must cover totalDebit.
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      senderWallet.id,
+      intent.asset,
+    );
+    if (toScaled(balance) < toScaled(totalDebit)) {
+      throw new InsufficientBalanceError(balance, totalDebit, intent.asset);
+    }
+
+    // g. KYC/velocity gate on the base-fiat-equivalent (§3.3). onChainSend:false —
+    // an internal transfer never touches the chain, so the on-chain per-send cap
+    // does not apply. capability 'crypto.transfer' resolves the tier_2 floor.
+    const { baseFiat, ngnEquivalent } = this.resolveGateFiatEquivalent(
+      intent.asset,
+      intent.cryptoAmount,
+    );
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnEquivalent,
+      fiatCurrency: baseFiat,
+      asset: intent.asset,
+      onChainSend: false,
+      capability: 'crypto.transfer',
+    });
+
+    // h. Counterparty (recipient) sanctions screening — screened by IDENTITY
+    // (there is no on-chain address); event always written (Task 8). Block on fail.
+    const screen = await this.complianceService.screenCounterpartyUser({
+      userId: destination.recipientUserId,
+    });
+    if (!screen.passed) {
+      throw new SanctionsBlockedError(
+        destination.displayHandle,
+        screen.reason ?? undefined,
+        screen.complianceEventId,
+        screen.complianceEventId,
+      );
+    }
+
+    // i. Travel Rule does NOT apply to a within-custodian internal transfer —
+    // both parties are our KYC'd users and no external VASP is involved (FATF R16
+    // targets cross-VASP transfers). requiresTravelRule stays false.
+
+    // j. Persist the Proposal (type=internal_transfer, pending; no Quote row —
+    // not an FX quote; no toAddress; no beneficiaryId). TTL mirrors the send
+    // confirmation window (catalog.sendQuoteExpiresInSec, admin-tunable §7).
+    const expiresInSec =
+      this.configService.get<CatalogConfig>('catalog')?.sendQuoteExpiresInSec ??
+      300;
+    const expiresAt = new Date(now.getTime() + expiresInSec * 1000);
+
+    const parameters: Record<string, unknown> = {
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      network,
+      networkFeeCrypto,
+      totalDebit,
+      destinationKind: 'internal_user',
+      recipientUserId: destination.recipientUserId,
+      recipientWalletId: recipientWallet.id,
+      walletId: senderWallet.id,
+      requiresTravelRule: false,
+      // Audit-snapshot the recipient's @handle + display name at propose time so
+      // the settled transfer's read projections (MCP + chat) surface the
+      // counterparty identity WITHOUT a read-time cross-module lookup (§3.1 —
+      // resolved server-side, never model free-text).
+      recipientHandle: destination.displayHandle,
+      recipientDisplayName: destination.recipientDisplayName,
+    };
+    const parametersChecksum = sha256Hex(parameters);
+
+    const { id: proposalId } = await this.proposalRepo.create({
+      userId,
+      conversationId,
+      type: 'internal_transfer',
+      parameters,
+      parametersChecksum,
+      expiresAt,
+    });
+
+    // k. Build the itemized confirmation — instant (in-custody, no on-chain wait),
+    // legible via the recipient's display name + handle (NO masked address).
+    const confirmation = SendProposalConfirmationSchema.parse({
+      proposalId,
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      network,
+      networkFeeCrypto,
+      totalDebit,
+      recipientDisplayName: destination.recipientDisplayName,
+      recipientHandle: destination.displayHandle,
+      instant: true,
       expiresAt: expiresAt.toISOString(),
     });
 
