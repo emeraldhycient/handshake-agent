@@ -374,8 +374,7 @@ function TierRing({ tierNum, mobile }: { tierNum: number; mobile: boolean }) {
       </svg>
       <div
         className={cn(
-          "absolute inset-0 flex flex-col items-center justify-center",
-          mobile ? "gap-1" : "gap-1.5"
+          "absolute inset-0 flex flex-col items-center justify-center"
         )}
       >
         <span
