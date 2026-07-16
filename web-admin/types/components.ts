@@ -225,7 +225,6 @@ export interface MoneySeriesPoint {
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,
-  AdminEndUserDevice,
   AdminEndUserListItem,
   AdminPermissionRecord,
   AdminUser,
@@ -494,25 +493,8 @@ export interface PermissionMatrixEditorProps {
 
 // ─── Users page ──────────────────────────────────────────────────────────────────
 
-/** A resolved KYC-status → design token-pair descriptor for the users table. */
-export interface UserKycMeta {
-  /** The bucket label rendered in the pill (Verified / Pending / …). */
-  label: string
-  /** Tailwind background-token utility (`bg-sok`/`bg-swn`/…). */
-  bg: string
-  /** Tailwind text-token utility (`text-tok`/`text-twn`/…). */
-  fg: string
-}
-
 /** The risk facets the users filter row exposes as toggle chips (modeled fields only). */
 export type UserRiskFlag = "simSwap" | "sanctions"
-
-/** A rendered risk-filter chip's derived state. */
-export interface UserRiskChip {
-  value: UserRiskFlag
-  label: string
-  active: boolean
-}
 
 /** A user's KYC bucket → the design's `kycMeta` pill mapping (logic.js line 496). */
 export type UserKycStatus = "verified" | "pending" | "needs_info" | "rejected"
@@ -607,11 +589,6 @@ export interface KycStatusBadgeProps {
 export interface UserDetailProps {
   /** The route's user id (`/users/[id]`). */
   userId: string
-}
-
-export interface UserDeviceListProps {
-  userId: string
-  devices: AdminEndUserDevice[]
 }
 
 /**
@@ -850,13 +827,6 @@ export interface AmlRuleFormProps {
 }
 
 // ─── AML / risk page (§6.6) ─────────────────────────────────────────────────────────
-
-export interface AmlRiskRuleRowProps {
-  /** The engine rule rendered as a design risk-rule row. */
-  rule: AmlRule
-  /** Opens the maker-checker edit dialog for this rule. */
-  onEdit: (rule: AmlRule) => void
-}
 
 /** The design's white rounded-16 card shell. */
 export interface CardShellProps {
@@ -1524,18 +1494,6 @@ export interface MetricsErrorProps {
   isForbidden: boolean
 }
 
-// ─── Operator dashboard (design revamp — Dash screen) ─────────────────────────────────
-
-export interface OperatorDashboardProps {
-  /**
-   * When true the metrics query 403 (no Metrics grant) degrades to a friendly
-   * empty state for the KPI/volume/health/KYC blocks instead of an error — used
-   * on the ungated home page (§3.3 UX). The design-faithful attention sections
-   * (activity / approvals / alerts) render regardless.
-   */
-  gracefulOnForbidden?: boolean
-}
-
 // ─── Feature flags page (design §6.28) ─────────────────────────────────────────────
 // WIRED to the effective-config registry (`GET /admin/settings`): a registry-backed
 // flag (one with a `settingKey`) resolves a REAL effective `on` and exposes a working
@@ -2143,13 +2101,6 @@ export interface PricingRow {
   minmax: string
 }
 
-export interface PricingRowActionsProps {
-  /** The resolved row whose spread the Edit action patches. */
-  row: PricingRow
-  /** Whether the signed-in operator may write config (drives Edit vs read-only). */
-  canEdit: boolean
-}
-
 /**
  * One configured base rate — a mid-market `<code>`-per-1-`<asset>` price resolved from
  * `pricing.assets.<asset>.baseRates.<code>`. A currency is fail-closed on enablement
@@ -2532,18 +2483,6 @@ export interface LimitsBoardProps {
  */
 export type OpsHealth = "ok" | "warn" | "down"
 
-/** One provider status tile (dot + name + latency + status label). */
-export interface OpsProviderTile {
-  /** Provider display name (e.g. "Blockradar"). */
-  name: string
-  /** Round-trip / probe latency label (mono, tabular-nums; e.g. "142ms"). */
-  latency: string
-  /** Short status label rendered in the health-toned text (e.g. "Operational"). */
-  status: string
-  /** Drives the dot + status-label colour tokens. */
-  health: OpsHealth
-}
-
 /** One "Webhook queues" row (mono name + depth/retries meta + status label). */
 export interface OpsWebhookQueue {
   /** The queue's mono identifier (e.g. "blockradar.deposit"). */
@@ -2709,9 +2648,6 @@ export interface ApprovalInboxProps {
 // (`open` + `onOpenChange`) and takes the design's per-step content props. They are
 // pure presentation — they do NOT move money; a real callsite wires their submit to a
 // mutation. Built on the shared Dialog primitive (focus-trap + Esc close).
-
-/** The reserved fixed panel widths per flow step (design `flowWidth`, line 420). */
-export type FlowModalWidth = "440px" | "520px"
 
 /** A base shape every flow modal shares: open-state + a required action title. */
 export interface FlowModalBaseProps {

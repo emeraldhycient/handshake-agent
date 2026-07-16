@@ -2,8 +2,7 @@
 
 /**
  * UserStatusBadge / KycStatusBadge — canonical tokenised mappings for an END
- * user's account status and KYC status (distinct from the admin-console
- * `StatusBadge` in status-badge.tsx). One mapping each, reused by the users
+ * user's account status and KYC status. One mapping each, reused by the users
  * table and the detail drawer (root §13.1 / §13.2). Colour is never the sole
  * signal — the label carries it.
  */
