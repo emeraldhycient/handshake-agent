@@ -110,11 +110,3 @@ export function formatCountdown(seconds: number): string {
   const rem = s % 60
   return `${m}:${rem.toString().padStart(2, "0")}`
 }
-
-/**
- * Format a crypto amount with its asset symbol.
- * e.g. formatCrypto("31.25", "USDT") → "31.25 USDT"
- */
-export function formatCrypto(amount: string, asset: string): string {
-  return `${amount} ${asset}`
-}
