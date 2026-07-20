@@ -26,15 +26,9 @@ import { Label } from "@/components/ui/label"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAdminMe, useSubmitReport } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { ApiError } from "@/lib/api/client"
+import { toErrorMessage } from "@/lib/error-message"
 import type { ComplianceReport } from "@handshake-agent/contracts"
 import type { ComplianceReportSubmitDialogProps } from "@/types/components"
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
 
 function SubmitForm({
   report,
@@ -67,7 +61,7 @@ function SubmitForm({
         )
         if (ok) onClose()
       } catch (error) {
-        setLocalError(errorMessage(error))
+        setLocalError(toErrorMessage(error))
       }
     })()
   }
@@ -121,7 +115,7 @@ function SubmitForm({
             .then((ok) => {
               if (ok) onClose()
             })
-            .catch((error) => setLocalError(errorMessage(error)))
+            .catch((error) => setLocalError(toErrorMessage(error)))
         }}
       />
     </>

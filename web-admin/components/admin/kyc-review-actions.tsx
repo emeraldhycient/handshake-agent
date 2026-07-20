@@ -18,16 +18,10 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAdminMe, useApproveKyc, useRejectKyc } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { ApiError } from "@/lib/api/client"
+import { toErrorMessage } from "@/lib/error-message"
 import type { KycReviewActionsProps } from "@/types/components"
 
 const APPROVE_TIERS = KycApproveRequestSchema.shape.tier.options
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
 
 export function KycReviewActions({ submission }: KycReviewActionsProps) {
   const me = useAdminMe()
@@ -45,7 +39,7 @@ export function KycReviewActions({ submission }: KycReviewActionsProps) {
     try {
       await stepUp.run(action)
     } catch (error) {
-      setLocalError(errorMessage(error))
+      setLocalError(toErrorMessage(error))
     }
   }
 
@@ -132,7 +126,7 @@ export function KycReviewActions({ submission }: KycReviewActionsProps) {
         onSuccess={() => {
           void stepUp
             .retry()
-            .catch((error) => setLocalError(errorMessage(error)))
+            .catch((error) => setLocalError(toErrorMessage(error)))
         }}
       />
     </div>
