@@ -33,6 +33,7 @@ import {
   TransactionType,
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
+import { fromScaled18, toScaled18 } from '../../../core/common/decimal-scale';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { computeTxProfit } from '../domain/tx-profit';
 import type {
@@ -53,10 +54,6 @@ import type {
   TxnDailyBucket,
   TxnTypeCount,
 } from '../application/ports/metrics-read.repository.port';
-
-/** Ledger amounts are Decimal(38,18); 18 fractional digits is the column scale. */
-const LEDGER_SCALE = 18;
-const SCALE_FACTOR = 10n ** BigInt(LEDGER_SCALE);
 
 /** The transactable services surfaced on the dashboard, in display order. */
 const SERVICE_TYPES = ['buy', 'sell', 'send', 'swap'] as const;
@@ -93,38 +90,6 @@ function capabilityOf(type: string): Capability | null {
 /** A fresh zeroed per-capability bucket for one day. */
 function emptyStackedBucket(date: string): TxnCapabilityBucketRow {
   return { date, buy: 0, sell: 0, send: 0, swap: 0, ticket: 0, total: 0 };
-}
-
-/**
- * Parses a signed decimal string into a scaled BigInt (×10^18) for exact integer
- * arithmetic — floats cannot represent 18-digit ledger amounts without drift.
- */
-function toScaledBigInt(value: string): bigint {
-  const negative = value.startsWith('-');
-  const unsigned = negative ? value.slice(1) : value;
-  const [intPart, fracPart = ''] = unsigned.split('.');
-  const fracPadded = (fracPart + '0'.repeat(LEDGER_SCALE)).slice(
-    0,
-    LEDGER_SCALE,
-  );
-  const magnitude = BigInt((intPart || '0') + fracPadded);
-  return negative ? -magnitude : magnitude;
-}
-
-/** Converts a scaled BigInt back to a canonical decimal string (no trailing zeros). */
-function fromScaledBigInt(scaled: bigint): string {
-  const negative = scaled < 0n;
-  const abs = negative ? -scaled : scaled;
-  const whole = abs / SCALE_FACTOR;
-  const frac = abs % SCALE_FACTOR;
-  if (frac === 0n) {
-    return (negative ? '-' : '') + whole.toString();
-  }
-  const fracStr = frac
-    .toString()
-    .padStart(LEDGER_SCALE, '0')
-    .replace(/0+$/, '');
-  return (negative ? '-' : '') + whole.toString() + '.' + fracStr;
 }
 
 /** UTC YYYY-MM-DD key for a date (the daily-series bucket key). */
@@ -322,17 +287,14 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         order.push(fiatCurrency);
         sums.set(fiatCurrency, 0n);
       }
-      sums.set(
-        fiatCurrency,
-        sums.get(fiatCurrency)! + toScaledBigInt(fiatAmount),
-      );
+      sums.set(fiatCurrency, sums.get(fiatCurrency)! + toScaled18(fiatAmount));
       txnCount += 1;
     }
 
     const totalByCurrency: CurrencyAmount[] = order
       .map((currency) => ({
         currency,
-        amount: fromScaledBigInt(sums.get(currency)!),
+        amount: fromScaled18(sums.get(currency)!),
       }))
       .sort((a, b) => a.currency.localeCompare(b.currency));
 
@@ -404,25 +366,22 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         feeSums.set(currency, 0n);
         spreadSums.set(currency, 0n);
       }
-      feeSums.set(currency, feeSums.get(currency)! + toScaledBigInt(fee));
-      spreadSums.set(
-        currency,
-        spreadSums.get(currency)! + toScaledBigInt(spread),
-      );
+      feeSums.set(currency, feeSums.get(currency)! + toScaled18(fee));
+      spreadSums.set(currency, spreadSums.get(currency)! + toScaled18(spread));
     }
 
     const project = (m: Map<string, bigint>): CurrencyAmount[] =>
       order
         .map((currency) => ({
           currency,
-          amount: fromScaledBigInt(m.get(currency)!),
+          amount: fromScaled18(m.get(currency)!),
         }))
         .sort((a, b) => a.currency.localeCompare(b.currency));
 
     const totalProfitByCurrency: CurrencyAmount[] = order
       .map((currency) => ({
         currency,
-        amount: fromScaledBigInt(
+        amount: fromScaled18(
           feeSums.get(currency)! + spreadSums.get(currency)!,
         ),
       }))
@@ -520,7 +479,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         typeof fiatCurrency === 'string' &&
         (!filter?.currency || fiatCurrency === filter.currency)
       ) {
-        cellFor(day, fiatCurrency).gmv += toScaledBigInt(fiatAmount);
+        cellFor(day, fiatCurrency).gmv += toScaled18(fiatAmount);
       }
 
       // Fee + profit leg — derived from the buy/sell Quote snapshot.
@@ -540,9 +499,9 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
           ).toString(),
         });
         const cell = cellFor(day, q.fiatCurrency);
-        const scaledFee = toScaledBigInt(fee);
+        const scaledFee = toScaled18(fee);
         cell.fee += scaledFee;
-        cell.profit += scaledFee + toScaledBigInt(spread);
+        cell.profit += scaledFee + toScaled18(spread);
       }
     }
 
@@ -553,7 +512,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       [...byCurrency.entries()]
         .map(([currency, cell]) => ({
           currency,
-          amount: fromScaledBigInt(cell[pick]),
+          amount: fromScaled18(cell[pick]),
         }))
         .sort((a, b) => a.currency.localeCompare(b.currency));
 

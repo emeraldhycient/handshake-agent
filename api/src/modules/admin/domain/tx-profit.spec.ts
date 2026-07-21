@@ -69,6 +69,37 @@ describe('computeTxProfit', () => {
     });
   });
 
+  // A quote can realize a NEGATIVE spread — the base rate moved against us between
+  // quote and settle, or `cryptoAmount` flooring overshot. The sign must survive
+  // both the derivation and the scale-18 round trip, because the metrics repo SUMS
+  // these per currency: a spread that came back unsigned would silently inflate
+  // reported platform profit. Nothing else pinned the negative branch.
+  it('returns a NEGATIVE spread (and profit) for a loss-making buy', () => {
+    // netFiat 990 buys 1 unit whose mid value is 1000 → spread −10; fee 10 → profit −0.
+    expect(
+      computeTxProfit({
+        type: 'buy',
+        fiatAmount: '1000',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '10',
+      }),
+    ).toEqual({ fee: '10', spread: '-10', profit: '0' });
+  });
+
+  it('keeps a negative spread exact at fractional scale', () => {
+    // netFiat 999.5 vs mid 1000.25 → spread −0.75; fee 0.5 → profit −0.25.
+    expect(
+      computeTxProfit({
+        type: 'buy',
+        fiatAmount: '1000',
+        cryptoAmount: '1.00025',
+        baseRate: '1000',
+        processingFeeAmount: '0.5',
+      }),
+    ).toEqual({ fee: '0.5', spread: '-0.75', profit: '-0.25' });
+  });
+
   it('is exact for large ledger-scale amounts (no float drift)', () => {
     // BTC: base 100,000,000 NGN; buy 0.001 BTC at effective 101,500,000.
     // netFiat 101500 buys 0.001 at effective → mid 0.001×100000000 = 100000 → spread 1500.
