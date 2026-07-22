@@ -187,4 +187,79 @@ describe("mapTransactions", () => {
       expect(toneOf("failed")).not.toBe(toneOf("pending"))
     })
   })
+
+  describe("counterparty truncation", () => {
+    function subOf(counterparty: string): string {
+      const r: TransactionListResponse = {
+        items: [
+          {
+            id: "x",
+            type: "internal_transfer",
+            status: "completed",
+            asset: "USDT",
+            cryptoAmount: "1",
+            direction: "out",
+            counterparty,
+            createdAt: "2026-06-29T13:00:00.000Z",
+          },
+        ],
+      }
+      return mapTransactions(r, now)[0].items[0].sub
+    }
+
+    // A PayID handle is 3–30 chars (`PayIdSchema`) and reaches this mapper with
+    // an "@" prefix, so a counterparty as short as "@ada" is routine. Truncating
+    // one is not just pointless, it corrupts it: unguarded head/tail slices of a
+    // short string OVERLAP and render the handle doubled.
+    it("leaves a short PayID handle intact instead of doubling it", () => {
+      // Anchored: `toContain("to @ada")` would also pass on the doubled
+      // "to @ada…@ada", so it would prove nothing.
+      expect(subOf("@ada")).toMatch(/· to @ada$/)
+    })
+
+    it("leaves every counterparty short enough to fit unabbreviated", () => {
+      // 9 chars is the last width where head(4)+…+tail(4) cannot shorten it.
+      expect(subOf("@tobi1234")).toContain("to @tobi1234")
+      expect(subOf("@tobi1234")).not.toContain("…")
+    })
+
+    it("starts abbreviating at the first width that actually shortens", () => {
+      // 10 chars — one past the guard, so the ellipsis form is a real saving.
+      expect(subOf("@tobi12345")).toContain("to @tob…2345")
+    })
+
+    // The 4/4 masked width for real addresses is deliberate — pin it so the
+    // guard above can never be "fixed" by widening what long addresses show.
+    it("keeps the 4/4 masked width for a long chain address", () => {
+      expect(subOf("TQn9YgkXgk7rABCDEF")).toContain("to TQn9…CDEF")
+    })
+  })
+
+  // `titleCase` itself is covered in lib/transaction/format.test.ts; what this
+  // pins is the mapper's WIRING to it. Every other status fixture here is a
+  // single word, so dropping the call entirely would still pass them —
+  // `rolled_back` is the shape that makes the call observable.
+  it("title-cases a snake_case status for display", () => {
+    const r: TransactionListResponse = {
+      items: [
+        {
+          id: "rb",
+          type: "send",
+          status: "rolled_back",
+          asset: "USDT",
+          cryptoAmount: "1",
+          createdAt: "2026-06-29T13:00:00.000Z",
+        },
+      ],
+    }
+    const item = mapTransactions(r, now)[0].items[0]
+    expect(item.status).toBe("Rolled back")
+    // Pinned deliberately, NOT endorsed: this mapper's FAILURE_STATUSES
+    // ("failed"/"refunded"/"reversed") disagrees with `lib/transaction/format`
+    // `toneFor` ("failed"/"rolled_back"), which the detail modal uses — so the
+    // same rolled-back transaction reads amber "in flight" in this list and
+    // red in its own modal. Reconciling them is a display decision, not a
+    // rename; this assertion makes whichever way it is decided fail loudly here.
+    expect(item.statusTone).toBe("warn")
+  })
 })
