@@ -9,14 +9,11 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { VerifyEmailForm } from "@/components/auth/VerifyEmailForm"
+import type { VerifyEmailPageProps } from "@/types"
 
 export const metadata: Metadata = {
   title: "Verify your email — Handshake Agent",
   description: "Verify your email address to activate your account.",
-}
-
-interface VerifyEmailPageProps {
-  searchParams: Promise<Record<string, string>>
 }
 
 export default async function VerifyEmailPage({

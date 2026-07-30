@@ -412,6 +412,30 @@ export interface FocusTrapProps {
   className?: string
 }
 
+// ─── Shared query-state + deposit-warning atoms ──────────────────────────────
+
+export interface QueryErrorStateProps {
+  /** The query's refetch — wired to the Retry button. Omit to hide Retry. */
+  onRetry?: () => void
+  title?: string
+  description?: string
+  className?: string
+}
+
+export interface QueryEmptyStateProps {
+  title?: string
+  description?: string
+  className?: string
+}
+
+export interface DepositNetworkWarningProps {
+  /** Asset the address can receive, e.g. "USDT". */
+  asset: string
+  /** Network/standard the address is on, e.g. "TRON · TRC-20". */
+  network: string
+  className?: string
+}
+
 // ─── Auth forms ──────────────────────────────────────────────────────────────
 
 /** Props for SignupForm — no required props; self-contained. */

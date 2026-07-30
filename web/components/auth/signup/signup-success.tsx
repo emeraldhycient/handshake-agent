@@ -1,9 +1,5 @@
 import Link from "next/link"
-
-interface SignupSuccessProps {
-  /** Dev-only verification token — renders a shortcut link when present. */
-  devToken?: string
-}
+import type { SignupSuccessProps } from "@/types"
 
 /** Post-signup "check your email" confirmation. */
 export function SignupSuccess({ devToken }: SignupSuccessProps) {
