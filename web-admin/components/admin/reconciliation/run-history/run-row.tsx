@@ -5,7 +5,7 @@ import {
   RUN_STATUS_VARIANT,
   RUN_TYPE_LABEL,
 } from "@/constants/recon-run-history"
-import type { ReconRunRowProps } from "@/types/components"
+import type { ReconRunRowProps } from "@/types"
 
 import { RunBreaks } from "./run-breaks"
 

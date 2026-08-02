@@ -11,7 +11,7 @@
  * buttons; the active page uses the dark `--btn-dark` fill, Prev/Next dim at the ends.
  */
 import { cn } from "@/lib/utils"
-import type { PaginationProps } from "@/types/components"
+import type { PaginationProps } from "@/types"
 
 /**
  * The design's page-number collapse (logic.js `pageNums`): ≤7 pages render in full;

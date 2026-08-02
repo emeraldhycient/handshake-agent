@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useConversation } from "@/lib/query/hooks"
-import type { ConversationLogDetailProps } from "@/types/components"
+import type { ConversationLogDetailProps } from "@/types"
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—"

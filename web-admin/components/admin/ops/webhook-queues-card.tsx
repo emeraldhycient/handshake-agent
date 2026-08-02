@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { HEALTH_TEXT, QUEUE_STATUS_LABEL } from "@/constants/ops"
-import type { WebhookQueuesCardProps } from "@/types/components"
+import type { WebhookQueuesCardProps } from "@/types"
 
 /** Left panel — Webhook queues (mono name + depth/retries + status). */
 export function WebhookQueuesCard({ queues }: WebhookQueuesCardProps) {

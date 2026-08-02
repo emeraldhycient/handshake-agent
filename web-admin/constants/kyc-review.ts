@@ -1,6 +1,6 @@
 import type { KycStatus, KycTier } from "@handshake-agent/contracts"
 
-import type { KycTabId } from "@/types/components"
+import type { KycTabId } from "@/types"
 
 /**
  * Avatar hue palette (design `AVA`, logic.js line 3). Presentation-only: a stable hue

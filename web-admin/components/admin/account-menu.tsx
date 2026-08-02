@@ -14,7 +14,7 @@ import Link from "next/link"
 import { DropdownMenu } from "radix-ui"
 import { ChevronDown, LogOut, UserRound } from "lucide-react"
 
-import type { AccountMenuProps } from "@/types/components"
+import type { AccountMenuProps } from "@/types"
 
 /** Striped operator avatar (design §4.2) — brand-green token, never a hex. */
 const STRIPE_AVATAR =

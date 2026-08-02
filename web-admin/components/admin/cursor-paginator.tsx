@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { CursorPaginatorProps } from "@/types/components"
+import type { CursorPaginatorProps } from "@/types"
 
 const BTN =
   "h-8 rounded-[9px] border border-line bg-card px-3 text-xs font-bold text-ink2 transition-colors hover:bg-hov focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"

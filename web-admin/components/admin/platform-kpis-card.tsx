@@ -9,7 +9,7 @@
 import { FeatureCard } from "@/components/admin/feature-card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
-import type { PlatformKpisCardProps } from "@/types/components"
+import type { PlatformKpisCardProps } from "@/types"
 
 /** Format a ratio as a percentage; `signed` prefixes a + for non-negative growth. */
 function pct(rate: number, signed = false): string {

@@ -1,9 +1,6 @@
 import type { AdminCatalogFiat } from "@handshake-agent/contracts"
 
-import type {
-  CurrencyCatalogRow,
-  MakerCheckerDiffRow,
-} from "@/types/components"
+import type { CurrencyCatalogRow, MakerCheckerDiffRow } from "@/types"
 
 /**
  * Map the full admin fiat catalog (incl. disabled/off entries) onto table rows.

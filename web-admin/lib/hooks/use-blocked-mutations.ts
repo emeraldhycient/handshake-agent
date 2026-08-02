@@ -12,11 +12,7 @@ import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
 import { deriveKind } from "@/lib/blocked/format"
-import type {
-  PendingAdd,
-  PendingReplay,
-  SupersedeFlow,
-} from "@/types/components"
+import type { PendingAdd, PendingReplay, SupersedeFlow } from "@/types"
 
 /** Deny-list failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

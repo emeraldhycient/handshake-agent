@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAddCurrencyForm } from "@/lib/hooks/use-add-currency-form"
-import type { AddCurrencyDialogProps } from "@/types/components"
+import type { AddCurrencyDialogProps } from "@/types"
 
 export function AddCurrencyDialog(props: AddCurrencyDialogProps) {
   const { open, onOpenChange } = props

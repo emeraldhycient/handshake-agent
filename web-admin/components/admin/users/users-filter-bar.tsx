@@ -9,7 +9,7 @@ import {
   RISK_DEFS,
   TIER_OPTIONS,
 } from "@/constants/users"
-import type { UsersFilterBarProps } from "@/types/components"
+import type { UsersFilterBarProps } from "@/types"
 
 /** The Users-directory filter row: search + KYC/tier selects + risk chips. */
 export function UsersFilterBar({

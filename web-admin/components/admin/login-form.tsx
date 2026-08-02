@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { useAdminLoginForm } from "@/lib/hooks/use-admin-login-form"
-import type { LoginFormProps } from "@/types/components"
+import type { LoginFormProps } from "@/types"
 
 export function LoginForm({ className }: LoginFormProps) {
   const {

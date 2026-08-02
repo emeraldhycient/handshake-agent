@@ -1,4 +1,4 @@
-import type { ShapeGapNoteProps } from "@/types/components"
+import type { ShapeGapNoteProps } from "@/types"
 
 /**
  * An honest shape-gap note for a panel whose backing read endpoint does not exist yet.

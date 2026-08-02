@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { UserRow } from "@/components/admin/users/user-row"
 import { GRID_COLS } from "@/constants/users"
-import type { UsersTableProps } from "@/types/components"
+import type { UsersTableProps } from "@/types"
 
 /**
  * The 7-column directory table (Users.html lines 44/52): the select-all header row

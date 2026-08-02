@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { NavDestination } from "@/types/components"
+import type { NavDestination } from "@/types"
 
 import { buildResults, matches } from "./command-search"
 

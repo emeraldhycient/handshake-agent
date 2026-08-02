@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useSanctionsMonitoring } from "@/lib/query/hooks"
 import { toMonitorRows } from "@/lib/sanctions/format"
-import type { SanctionsMonitorRow } from "@/types/components"
+import type { SanctionsMonitorRow } from "@/types"
 
 /** Card chrome shared by every branch of the ongoing-monitoring section. */
 function MonitoringCard({ children }: { children: ReactNode }) {

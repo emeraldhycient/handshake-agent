@@ -10,7 +10,7 @@ import { TrendChart } from "@/components/admin/trend-chart"
 import { ExportCsvButton } from "@/components/admin/export-csv-button"
 import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
 import { VOLUME_SEGMENTS } from "@/constants/metrics"
-import type { MetricsCardProps } from "@/types/components"
+import type { MetricsCardProps } from "@/types"
 
 /**
  * Transaction-volume card — a daily trend line + labelled bar chart (with a legend and

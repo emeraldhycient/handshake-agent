@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { LOCK_PATH, PENCIL_PATH, SETTINGS_GRID } from "@/constants/settings"
 import { sourceTint } from "@/lib/settings/rows"
-import type { SettingsTableRowProps } from "@/types/components"
+import type { SettingsTableRowProps } from "@/types"
 
 /**
  * One body row of the settings grid: the mono key + `{type}` meta, the mono effective

@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { PermissionMatrixEditor } from "@/components/admin/roles/permission-matrix-editor"
 import { useRoleEditor } from "@/lib/hooks/use-role-editor"
-import type { RoleEditorDialogProps } from "@/types/components"
+import type { RoleEditorDialogProps } from "@/types"
 
 export function RoleEditorDialog({
   open,

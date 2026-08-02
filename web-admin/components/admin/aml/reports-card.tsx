@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useComplianceReports } from "@/lib/query/hooks"
 import { CardShell, InlineError } from "@/components/admin/aml/aml-shells"
 import { REPORT_STATUS_META } from "@/constants/aml"
-import type { ReportsCardProps } from "@/types/components"
+import type { ReportsCardProps } from "@/types"
 
 /**
  * Compliance-reports card — the SAR/STR filing list (wired to `useComplianceReports`).

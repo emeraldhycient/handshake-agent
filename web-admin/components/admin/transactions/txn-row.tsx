@@ -14,7 +14,7 @@ import {
   displayName,
   formatCreated,
 } from "@/lib/transactions/format"
-import type { TxnRowProps } from "@/types/components"
+import type { TxnRowProps } from "@/types"
 
 /** One ledger row — keyboard-navigable, opens the detail route; idempotency-key copy. */
 export function TxnRow({ txn, onOpen }: TxnRowProps) {

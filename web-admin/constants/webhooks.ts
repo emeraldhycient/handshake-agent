@@ -4,7 +4,7 @@
  * the label.
  */
 import type { WebhookEventStatus } from "@handshake-agent/contracts"
-import type { WebhookFilterState } from "@/types/components"
+import type { WebhookFilterState } from "@/types"
 
 /** The queue filter with no filters set (All providers / All statuses). */
 export const EMPTY_FILTER: WebhookFilterState = {

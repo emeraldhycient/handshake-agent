@@ -3,7 +3,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Panel } from "@/components/admin/user-detail/panel"
 import { actionDot, actionLabel } from "@/lib/users/user-detail"
 import { NOT_PROVIDED } from "@/constants/user-detail"
-import type { UdProfileTabProps } from "@/types/components"
+import type { UdProfileTabProps } from "@/types"
 
 /**
  * The Profile tab — Contact & locale (design fields the contract does not provide

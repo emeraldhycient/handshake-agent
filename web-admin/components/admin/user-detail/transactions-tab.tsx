@@ -1,7 +1,7 @@
 import { formatCryptoAmount } from "@/lib/format"
 import { fmtFiat, statusMeta } from "@/lib/users/user-detail"
 import { NOT_PROVIDED, TYPE_ICON } from "@/constants/user-detail"
-import type { UdTransactionsTabProps } from "@/types/components"
+import type { UdTransactionsTabProps } from "@/types"
 
 /** The Transactions tab — the user's recent transactions; each row opens the tx detail. */
 export function TransactionsTab({

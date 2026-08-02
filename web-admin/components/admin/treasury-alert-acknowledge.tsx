@@ -17,7 +17,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAcknowledgeAlert, useAdminMe } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
-import type { TreasuryAlertAcknowledgeProps } from "@/types/components"
+import type { TreasuryAlertAcknowledgeProps } from "@/types"
 
 function errorMessage(error: unknown): string | null {
   if (error instanceof ApiError) return error.message

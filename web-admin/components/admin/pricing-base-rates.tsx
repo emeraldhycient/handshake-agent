@@ -10,7 +10,7 @@
  */
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
-import type { PricingBaseRatesProps } from "@/types/components"
+import type { PricingBaseRatesProps } from "@/types"
 
 const BASE_RATE_GRID = "grid-cols-[0.9fr_0.9fr_1.4fr_0.7fr]"
 

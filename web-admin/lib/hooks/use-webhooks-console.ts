@@ -8,7 +8,7 @@ import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
 import { EMPTY_FILTER } from "@/constants/webhooks"
 import type { WebhookQuery } from "@/lib/api/webhooks"
-import type { WebhookFilterState } from "@/types/components"
+import type { WebhookFilterState } from "@/types"
 
 /** Webhook failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

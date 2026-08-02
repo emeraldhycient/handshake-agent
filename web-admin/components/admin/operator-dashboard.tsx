@@ -20,7 +20,7 @@ import { SystemHealthCard } from "@/components/admin/dashboard/system-health-car
 import { LiveActivityCard } from "@/components/admin/dashboard/live-activity-card"
 import { ApprovalsCard } from "@/components/admin/dashboard/approvals-card"
 import { AlertsCard } from "@/components/admin/dashboard/alerts-card"
-import type { DashboardRangeId } from "@/types/components"
+import type { DashboardRangeId } from "@/types"
 
 export function OperatorDashboard() {
   const [range, setRange] = useState<DashboardRangeId>("24h")

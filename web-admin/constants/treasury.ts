@@ -7,7 +7,7 @@ import type {
   TreasuryExposure,
   TreasurySweep,
 } from "@handshake-agent/contracts"
-import type { TreasuryCard, TreasurySweepRow } from "@/types/components"
+import type { TreasuryCard, TreasurySweepRow } from "@/types"
 
 // The custodial hero tile is a dark-green gradient identical in both themes (§5 KPI hero).
 export const HERO_GRADIENT =

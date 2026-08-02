@@ -16,7 +16,7 @@ import type {
   DashboardActivityItem,
   DashboardHealthRow,
   DashboardKpi,
-} from "@/types/components"
+} from "@/types"
 
 /** `f()` — design integer formatter (vDash line 438): `en-NG` grouping, no decimals. */
 export function fmtInt(n: number): string {

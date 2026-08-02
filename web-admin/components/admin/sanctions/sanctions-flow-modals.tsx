@@ -2,7 +2,7 @@
 
 import { ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
-import type { SanctionsFlowModalsProps } from "@/types/components"
+import type { SanctionsFlowModalsProps } from "@/types"
 
 /**
  * The shared disposition flow modals (SPEC §5): Clear / Escalate / Block each open a

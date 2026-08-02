@@ -10,7 +10,7 @@ import Link from "next/link"
 
 import { cn } from "@/lib/utils"
 import { isActive } from "@/lib/nav/admin-nav"
-import type { SidebarNavListProps } from "@/types/components"
+import type { SidebarNavListProps } from "@/types"
 
 export function SidebarNavList({
   loading,

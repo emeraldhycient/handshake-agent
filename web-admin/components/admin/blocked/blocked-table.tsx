@@ -2,7 +2,7 @@
 
 import { BLOCKED_GRID } from "@/constants/blocked"
 import { BlockedRow, LoadingRows } from "@/components/admin/blocked/blocked-row"
-import type { BlockedTableProps } from "@/types/components"
+import type { BlockedTableProps } from "@/types"
 
 /** The deny-list table card: column header + loading / error / empty / data branches. */
 export function BlockedTable({

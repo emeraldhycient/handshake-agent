@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { TableFilterBarProps } from "@/types/components"
+import type { TableFilterBarProps } from "@/types"
 
 /**
  * TableFilterBar — the shared filter/search strip that lives INSIDE a table card,

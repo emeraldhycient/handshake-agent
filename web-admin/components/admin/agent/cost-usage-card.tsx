@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 
 import { useAgentInsights } from "@/lib/query/hooks"
-import type { AgentKeyValueRowProps } from "@/types/components"
+import type { AgentKeyValueRowProps } from "@/types"
 
 import { CardError, CardShell, CardSkeleton } from "./agent-card-shells"
 

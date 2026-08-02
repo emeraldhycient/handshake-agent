@@ -1,7 +1,7 @@
 import Link from "next/link"
 
 import { LEDGER_GRID } from "@/constants/ledger"
-import type { LedgerRowLineProps } from "@/types/components"
+import type { LedgerRowLineProps } from "@/types"
 
 /** One ledger body row — Seq · Account · Dir · Amount · Running · Source (design §6.11). */
 export function LedgerRowLine({ row }: LedgerRowLineProps) {

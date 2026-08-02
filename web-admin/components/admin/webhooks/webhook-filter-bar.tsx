@@ -7,7 +7,7 @@ import {
 
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
-import type { WebhookFilterBarProps } from "@/types/components"
+import type { WebhookFilterBarProps } from "@/types"
 
 /** The webhook-queue filter bar: provider + status + received from/to window. */
 export function WebhookFilterBar({ filter, onChange }: WebhookFilterBarProps) {

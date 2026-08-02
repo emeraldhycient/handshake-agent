@@ -1,4 +1,4 @@
-import type { NavDestination } from "@/types/components"
+import type { NavDestination } from "@/types"
 
 /** Case-insensitive substring match on the label (and its group). */
 export function matches(dest: NavDestination, query: string): boolean {

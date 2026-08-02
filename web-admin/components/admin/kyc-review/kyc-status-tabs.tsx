@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { MISSING, TABS } from "@/constants/kyc-review"
-import type { KycStatusTabsProps } from "@/types/components"
+import type { KycStatusTabsProps } from "@/types"
 
 /** The status pill-tabs — one per bucket, each with a live count badge (design). */
 export function KycStatusTabs({

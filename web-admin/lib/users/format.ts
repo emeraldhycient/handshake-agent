@@ -2,7 +2,7 @@ import type { AdminEndUserListItem } from "@handshake-agent/contracts"
 
 import { initialsOf } from "@/lib/avatar"
 import { AVATAR_HUES, KYC_STATUS_TO_BUCKET } from "@/constants/users"
-import type { UsersRow } from "@/types/components"
+import type { UsersRow } from "@/types"
 
 /** Stable avatar hue from a user id (no colour field in the list contract). */
 export function avatarHue(id: string): string {

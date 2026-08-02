@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
 import { displayName, initialsOf } from "@/lib/users/user-detail"
 import { KYC_STATUS_META, U_ACTIONS } from "@/constants/user-detail"
-import type { UserDetailHeaderProps } from "@/types/components"
+import type { UserDetailHeaderProps } from "@/types"
 
 export function UserDetailHeader({
   detail,

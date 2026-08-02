@@ -5,7 +5,7 @@ import { useMemo } from "react"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { deriveKpis } from "@/lib/dashboard/format"
-import type { KpiGridProps } from "@/types/components"
+import type { KpiGridProps } from "@/types"
 
 const GRID = "mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4"
 

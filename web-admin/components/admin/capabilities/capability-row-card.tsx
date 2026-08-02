@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { TONE_TILE } from "@/constants/capabilities"
-import type { CapabilityRowProps } from "@/types/components"
+import type { CapabilityRowProps } from "@/types"
 
 /**
  * One capability kill-switch row (design §6.25): a tinted 42px icon tile, the mono label

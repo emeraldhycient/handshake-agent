@@ -22,7 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { KycStatusBadge } from "@/components/admin/user-status-badge"
 import { KycReviewActions } from "@/components/admin/kyc-review-actions"
 import { useKycSubmission } from "@/lib/query/hooks"
-import type { KycSubmissionProps } from "@/types/components"
+import type { KycSubmissionProps } from "@/types"
 
 function fullName(first: string | null, last: string | null): string {
   const name = [first, last].filter(Boolean).join(" ")

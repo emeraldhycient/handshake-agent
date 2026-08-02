@@ -1,7 +1,7 @@
 import { useMemo, type CSSProperties } from "react"
 
 import { accessLevel, MATRIX_CATEGORIES } from "@/lib/roles/access"
-import type { RoleAccessMatrixProps } from "@/types/components"
+import type { RoleAccessMatrixProps } from "@/types"
 
 import { AccessTile, ACCESS_META } from "./access-tile"
 

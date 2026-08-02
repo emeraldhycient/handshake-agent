@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { KPI_RANGES } from "@/constants/dashboard"
-import type { DashboardHeaderProps } from "@/types/components"
+import type { DashboardHeaderProps } from "@/types"
 
 /** The dashboard title + subtitle and the 24h/7d/30d KPI-range switcher. */
 export function DashboardHeader({

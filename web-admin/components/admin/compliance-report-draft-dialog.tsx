@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button"
 import { DraftFormFields } from "@/components/admin/compliance-report-draft/draft-form-fields"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useComplianceReportDraft } from "@/lib/hooks/use-compliance-report-draft"
-import type { ComplianceReportDraftDialogProps } from "@/types/components"
+import type { ComplianceReportDraftDialogProps } from "@/types"
 
 function DraftForm({ onClose }: { onClose: () => void }) {
   const form = useComplianceReportDraft(onClose)

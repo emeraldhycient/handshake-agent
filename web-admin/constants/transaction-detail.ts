@@ -1,10 +1,6 @@
 import type { AdminTxnStatus, ReconBreak } from "@handshake-agent/contracts"
 
-import type {
-  StatusPillStatus,
-  TxActionButton,
-  TxTimelineTone,
-} from "@/types/components"
+import type { StatusPillStatus, TxActionButton, TxTimelineTone } from "@/types"
 
 /** Subtle placeholder for a design field the contract does not yet provide. */
 export const DASH = "—"

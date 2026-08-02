@@ -9,7 +9,7 @@ import {
 
 import { toErrorMessage } from "@/lib/error-message"
 import { useCreateInvitation } from "@/lib/query/hooks"
-import type { InviteAdminDialogProps } from "@/types/components"
+import type { InviteAdminDialogProps } from "@/types"
 
 /**
  * View-model for the "Invite an admin" dialog. Owns the RHF form (email + role,

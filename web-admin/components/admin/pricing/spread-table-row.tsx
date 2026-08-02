@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { PRICING_GRID } from "@/constants/pricing"
 import { formatFiat } from "@/lib/format"
-import type { SpreadTableRowProps } from "@/types/components"
+import type { SpreadTableRowProps } from "@/types"
 
 /**
  * One body row of the spread grid: capability, asset/ccy pair, spread, fee, the editable

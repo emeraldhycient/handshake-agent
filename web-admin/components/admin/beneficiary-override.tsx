@@ -14,7 +14,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAdminMe, useOverrideCoolingOff } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
-import type { BeneficiaryOverrideProps } from "@/types/components"
+import type { BeneficiaryOverrideProps } from "@/types"
 
 function errorMessage(error: unknown): string | null {
   if (error instanceof ApiError) return error.message

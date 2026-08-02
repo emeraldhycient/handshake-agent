@@ -5,7 +5,7 @@ import type {
 } from "@handshake-agent/contracts"
 
 import { useAgentConfig, useAgentInsights } from "@/lib/query/hooks"
-import type { AgentKeyValueRowProps } from "@/types/components"
+import type { AgentKeyValueRowProps } from "@/types"
 
 import { CardError, CardShell, CardSkeleton } from "./agent-card-shells"
 

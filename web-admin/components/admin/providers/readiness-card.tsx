@@ -1,4 +1,4 @@
-import type { ReadinessCardProps } from "@/types/components"
+import type { ReadinessCardProps } from "@/types"
 
 import { ReadinessIcon } from "./provider-icons"
 

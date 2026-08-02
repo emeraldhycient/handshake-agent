@@ -19,7 +19,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAdminMe, useApproveKyc, useRejectKyc } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
-import type { KycReviewActionsProps } from "@/types/components"
+import type { KycReviewActionsProps } from "@/types"
 
 const APPROVE_TIERS = KycApproveRequestSchema.shape.tier.options
 

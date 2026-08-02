@@ -12,7 +12,7 @@ import {
 import { useWebhookDetail } from "@/lib/query/hooks"
 import { STATUS_VARIANT } from "@/constants/webhooks"
 import { formatDate, prettyJson } from "@/lib/webhooks/format"
-import type { WebhookDetailDrawerProps } from "@/types/components"
+import type { WebhookDetailDrawerProps } from "@/types"
 
 function DetailField({ label, value }: { label: string; value: string }) {
   return (

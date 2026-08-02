@@ -1,7 +1,7 @@
 "use client"
 
 import { BeneficiaryOverride } from "@/components/admin/beneficiary-override"
-import type { CoolingOffPanelProps } from "@/types/components"
+import type { CoolingOffPanelProps } from "@/types"
 
 /**
  * Beneficiaries still inside their first-use cooling-off window (IDN-08). The override

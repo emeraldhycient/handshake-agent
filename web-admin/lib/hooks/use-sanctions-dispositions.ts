@@ -12,10 +12,7 @@ import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
 import { DONE_META } from "@/constants/sanctions"
 import type { SanctionsRecordItem } from "@handshake-agent/contracts"
-import type {
-  SanctionsActiveFlow,
-  SanctionsMatchDone,
-} from "@/types/components"
+import type { SanctionsActiveFlow, SanctionsMatchDone } from "@/types"
 
 /** Sanctions failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

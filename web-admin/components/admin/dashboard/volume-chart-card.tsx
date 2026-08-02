@@ -7,7 +7,7 @@ import { ChartBars } from "@/components/admin/chart-bars"
 import { Skeleton } from "@/components/ui/skeleton"
 import { VOL_COLORS } from "@/constants/dashboard"
 import { volBarsFrom } from "@/lib/dashboard/format"
-import type { VolumeChartCardProps } from "@/types/components"
+import type { VolumeChartCardProps } from "@/types"
 
 /** The volume-chart legend swatches (design lines 30-42). */
 function VolumeLegend() {

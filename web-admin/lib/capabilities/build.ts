@@ -1,7 +1,7 @@
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { PRESENTATION } from "@/constants/capabilities"
-import type { ResolvedCapability } from "@/types/components"
+import type { ResolvedCapability } from "@/types"
 
 /**
  * Join the static presentation with the live capability settings: each design row's

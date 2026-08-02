@@ -1,4 +1,4 @@
-import type { DiffLineProps } from "@/types/components"
+import type { DiffLineProps } from "@/types"
 
 import { DiffArrow } from "./approval-icons"
 

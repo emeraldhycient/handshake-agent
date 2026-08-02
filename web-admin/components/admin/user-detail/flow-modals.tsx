@@ -19,7 +19,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { SupportedAssetSchema } from "@handshake-agent/contracts"
 import type { SupportedAsset } from "@handshake-agent/contracts"
 import { creditFlowRows, creditableAssetsFor } from "@/lib/users/user-detail"
-import type { UserDetailFlowModalsProps } from "@/types/components"
+import type { UserDetailFlowModalsProps } from "@/types"
 
 export function UserDetailFlowModals({
   userId,

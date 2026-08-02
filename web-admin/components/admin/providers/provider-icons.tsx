@@ -1,4 +1,4 @@
-import type { ReadinessIconProps } from "@/types/components"
+import type { ReadinessIconProps } from "@/types"
 
 /** The MOCK-MODE banner's warning triangle (design 24×24 path). */
 export function WarningTriangleIcon() {

@@ -22,7 +22,7 @@ import {
   SELECT_CLASS,
 } from "@/constants/metrics-filter"
 import { cn } from "@/lib/utils"
-import type { MetricsFilterBarProps } from "@/types/components"
+import type { MetricsFilterBarProps } from "@/types"
 
 export function MetricsFilterBar({
   value,

@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import type { AgentCardShellProps, InlineErrorProps } from "@/types/components"
+import type { AgentCardShellProps, InlineErrorProps } from "@/types"
 
 /** A card shell — its title is stable across every async branch. */
 export function CardShell({

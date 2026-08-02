@@ -1,6 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { RolePermissionMatrix } from "@/components/admin/role-permission-matrix"
-import type { RoleMatrixSectionProps } from "@/types/components"
+import type { RoleMatrixSectionProps } from "@/types"
 
 /**
  * The role permission matrix region — the "New role" CTA above the shared

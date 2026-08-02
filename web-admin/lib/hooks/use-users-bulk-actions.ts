@@ -13,7 +13,7 @@ import { pushToast } from "@/lib/store/toast-store"
 import { toErrorMessage } from "@/lib/error-message"
 import { isBulkConfirmError } from "@/lib/users/bulk"
 import { EVENT_TYPES } from "@/constants/users-bulk"
-import type { UsersBulkActionsProps } from "@/types/components"
+import type { UsersBulkActionsProps } from "@/types"
 
 /**
  * The Users bulk-bar WRITE state machine: apply an operator TAG or queue a templated

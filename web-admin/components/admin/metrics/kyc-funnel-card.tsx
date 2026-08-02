@@ -1,6 +1,6 @@
 import { MetricsBar } from "@/components/admin/metrics-bar"
 import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
-import type { MetricsCardProps } from "@/types/components"
+import type { MetricsCardProps } from "@/types"
 
 /** KYC funnel card — the current population by verification status and by KYC tier. */
 export function KycFunnelCard({ data }: MetricsCardProps) {

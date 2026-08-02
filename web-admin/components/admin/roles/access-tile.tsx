@@ -1,6 +1,6 @@
 import { Check, Eye, X } from "lucide-react"
 
-import type { AccessLevel, AccessTileProps } from "@/types/components"
+import type { AccessLevel, AccessTileProps } from "@/types"
 
 /** The access-level → label + tile tokens + glyph map (shared by tiles + the legend). */
 export const ACCESS_META: Record<

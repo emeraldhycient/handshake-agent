@@ -23,7 +23,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { ComplianceEventSummary } from "@/components/admin/compliance/event-detail/event-summary"
 import { ComplianceDispositionForm } from "@/components/admin/compliance/event-detail/disposition-form"
 import { useComplianceEventDetail } from "@/lib/hooks/use-compliance-event-detail"
-import type { ComplianceEventDetailProps } from "@/types/components"
+import type { ComplianceEventDetailProps } from "@/types"
 
 export function ComplianceEventDetail({
   eventId,

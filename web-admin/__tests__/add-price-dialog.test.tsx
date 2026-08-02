@@ -10,7 +10,7 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { AddPriceDialog } from "@/components/admin/add-price-dialog"
-import type { AddPriceOption } from "@/types/components"
+import type { AddPriceOption } from "@/types"
 
 const OPTIONS: AddPriceOption[] = [
   { asset: "USDT", code: "NGN" },

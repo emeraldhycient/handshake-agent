@@ -1,6 +1,6 @@
 import { Panel } from "@/components/admin/user-detail/panel"
 import { NOT_PROVIDED } from "@/constants/user-detail"
-import type { UdKycIdentityPanelProps } from "@/types/components"
+import type { UdKycIdentityPanelProps } from "@/types"
 
 /**
  * The KYC tab's left column — identity documents (NIN/BVN shown as last-4 only; the

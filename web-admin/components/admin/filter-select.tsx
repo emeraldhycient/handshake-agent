@@ -7,7 +7,7 @@
  * declarative `options` list, so every screen's filter row composes the same control.
  */
 import { NativeSelect } from "@/components/ui/native-select"
-import type { FilterSelectProps } from "@/types/components"
+import type { FilterSelectProps } from "@/types"
 
 export function FilterSelect({ label, options, ...props }: FilterSelectProps) {
   return (

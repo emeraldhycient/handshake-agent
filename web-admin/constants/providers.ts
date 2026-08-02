@@ -1,6 +1,6 @@
 import type { ProviderRegistryStatus } from "@handshake-agent/contracts"
 
-import type { BadgeVariant } from "@/types/components"
+import type { BadgeVariant } from "@/types"
 
 /**
  * Provider status word → the canonical status→token pill variant (§5). Colour is

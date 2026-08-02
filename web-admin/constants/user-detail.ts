@@ -3,7 +3,7 @@ import type {
   AdminEndUserTierRequest,
 } from "@handshake-agent/contracts"
 
-import type { PillMeta, UdActionKey, UdTab } from "@/types/components"
+import type { PillMeta, UdActionKey, UdTab } from "@/types"
 
 /** Subtle placeholder for a design field the contract does not yet provide. */
 export const NOT_PROVIDED = "—"

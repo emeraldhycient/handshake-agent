@@ -14,7 +14,7 @@ import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import type {
   AdminRowActionsProps,
   AdminSettableStatus,
-} from "@/types/components"
+} from "@/types"
 
 /**
  * View-model for the per-row admin actions (change role / change status). Both

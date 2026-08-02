@@ -3,7 +3,7 @@
 import { FilterSelect } from "@/components/admin/filter-select"
 import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { ACTION_OPTIONS, FILTER_SELECT_CLASS } from "@/constants/audit"
-import type { AuditFilterBarProps } from "@/types/components"
+import type { AuditFilterBarProps } from "@/types"
 
 /** The audit-log filter row: search (→ `subject`) + action enum + from/to date range. */
 export function AuditFilterBar({

@@ -11,7 +11,7 @@ import {
   engineEffect,
   engineLedger,
 } from "@/lib/reconciliation/format"
-import type { ReconBreakFlowsProps } from "@/types/components"
+import type { ReconBreakFlowsProps } from "@/types"
 
 /** Prefix the audited reason with the selected category, when one was chosen. */
 function withCategory(reason: string, category?: string): string {

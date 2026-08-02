@@ -8,7 +8,7 @@ import type {
   ComplianceSeverity,
   SanctionsRecordItem,
 } from "@handshake-agent/contracts"
-import type { BadgeVariant, ComplianceTab } from "@/types/components"
+import type { BadgeVariant, ComplianceTab } from "@/types"
 
 export const TABS: readonly ComplianceTab[] = [
   "Events",

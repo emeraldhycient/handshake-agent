@@ -1,6 +1,6 @@
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
-import type { SettingRow, SettingSource } from "@/types/components"
+import type { SettingRow, SettingSource } from "@/types"
 
 /**
  * Render an effective value (whose runtime type matches its `valueType`) as the mono

@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import type { RolesTableProps } from "@/types/components"
+import type { RolesTableProps } from "@/types"
 
 /**
  * The roles table — one row per role (name + built-in badge · description · granted

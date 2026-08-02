@@ -7,7 +7,7 @@ import type {
   PricingBaseRateRow,
   PricingCap,
   SpreadRow,
-} from "@/types/components"
+} from "@/types"
 
 /** basis points → a 2-decimal percent label (150 → "1.50%"). */
 export function bpsToPct(bps: number): string {

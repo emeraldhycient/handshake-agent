@@ -2,11 +2,7 @@ import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { formatFiat } from "@/lib/format"
 import { bpsToPct, formatRate } from "@/lib/pricing/rows"
-import type {
-  EditTarget,
-  PricingBaseRateRow,
-  SpreadRow,
-} from "@/types/components"
+import type { EditTarget, PricingBaseRateRow, SpreadRow } from "@/types"
 
 /** Edit-target for a Buy/Sell spread (whole basis points). */
 export function spreadTarget(row: SpreadRow): EditTarget {

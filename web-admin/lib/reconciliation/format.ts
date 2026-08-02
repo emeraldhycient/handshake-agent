@@ -6,7 +6,7 @@ import type {
   EngineEffectRow,
   EngineLedgerRow,
   MakerCheckerDiffRow,
-} from "@/types/components"
+} from "@/types"
 
 /**
  * Delta tint from the break kind: danger for over/duplicate credits (a positive delta

@@ -9,11 +9,7 @@ import type {
 
 import { formatAmount, formatCrypto, formatFiat } from "@/lib/format"
 import { EXPOSURE_DOT, SWEEP_LABEL } from "@/constants/treasury"
-import type {
-  TreasuryCard,
-  TreasuryPayoutRow,
-  TreasurySweepRow,
-} from "@/types/components"
+import type { TreasuryCard, TreasuryPayoutRow, TreasurySweepRow } from "@/types"
 
 // Amounts arrive as byte-stable decimal strings — format for display only,
 // never for math. All fiat figures go through the canonical `formatFiat(value,

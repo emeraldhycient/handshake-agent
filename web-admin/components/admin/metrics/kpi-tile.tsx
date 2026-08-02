@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { KpiTileProps } from "@/types/components"
+import type { KpiTileProps } from "@/types"
 
 /**
  * KPI stat tile (§5). Tile 0 is the dark-green "hero" — a brand-green→deep

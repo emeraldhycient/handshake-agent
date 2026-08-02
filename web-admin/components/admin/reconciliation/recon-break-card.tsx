@@ -7,7 +7,7 @@ import {
   SEVERITY_META,
 } from "@/constants/reconciliation"
 import { deltaTone, formatDelta } from "@/lib/reconciliation/format"
-import type { ReconBreakCardProps } from "@/types/components"
+import type { ReconBreakCardProps } from "@/types"
 
 /**
  * One reconciliation break card: icon tile + kind label + severity pill + tx link +

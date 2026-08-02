@@ -14,7 +14,7 @@ import type {
   EngineLedgerRow,
   MakerCheckerDiffRow,
   PillMeta,
-} from "@/types/components"
+} from "@/types"
 
 /** Display name from KYC identity, falling back to the email local-part, then id. */
 export function displayName(

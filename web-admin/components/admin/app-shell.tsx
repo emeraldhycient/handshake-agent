@@ -41,7 +41,7 @@ import { CommandPalette } from "@/components/admin/command-palette"
 import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
 import { RouteGuard } from "@/components/admin/route-guard"
 import { Toaster } from "@/components/shared/toaster"
-import type { AppShellProps } from "@/types/components"
+import type { AppShellProps } from "@/types"
 
 /**
  * The centralized admin guard: authentication runs here (before ANY chrome or data

@@ -22,7 +22,7 @@ import { MoneyTrendToolbar } from "@/components/admin/money-trend/trend-toolbar"
 import { moneySeriesPoints, peakPoint } from "@/lib/money-series-points"
 import { resolveCurrency } from "@/lib/money-trend"
 import { MONEY_METRICS } from "@/constants/money-trend"
-import type { MoneyMetric, MoneyTrendCardProps } from "@/types/components"
+import type { MoneyMetric, MoneyTrendCardProps } from "@/types"
 
 export function MoneyTrendCard({
   data,

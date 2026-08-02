@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { DONE_META, VERDICT_META } from "@/constants/sanctions"
-import type { SanctionsMatchCardProps } from "@/types/components"
+import type { SanctionsMatchCardProps } from "@/types"
 
 /** The red-triangle danger mark (design line 8 icon tile). */
 function TriangleMark({ open }: { open: boolean }) {

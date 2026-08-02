@@ -10,7 +10,7 @@ import {
 import { metricsQueryFromFilter } from "@/lib/metrics-range"
 import { ApiError } from "@/lib/api/client"
 import { DEFAULT_METRICS_FILTER } from "@/constants/metrics"
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 /**
  * The metrics dashboard's data layer: a filter-bar state that resolves into a single

@@ -1,5 +1,5 @@
 import { CUSTOM_PRESET_ID } from "@/lib/metrics-range"
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 // Currency options are NOT a static list here — they derive from the live
 // catalog read via `useCurrencyFilterOptions` so runtime-added fiats appear.

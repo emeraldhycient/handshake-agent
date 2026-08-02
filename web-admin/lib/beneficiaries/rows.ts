@@ -1,6 +1,6 @@
 import type { AdminBeneficiary } from "@handshake-agent/contracts"
 
-import type { BadgeVariant } from "@/types/components"
+import type { BadgeVariant } from "@/types"
 
 /** Absolute local timestamp, or an em-dash when the date is null. */
 export function formatDate(iso: string | null): string {

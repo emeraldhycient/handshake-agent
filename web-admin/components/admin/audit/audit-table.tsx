@@ -3,7 +3,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { AuditRow } from "@/components/admin/audit/audit-row"
 import { GRID_COLS, PAGE_SIZE } from "@/constants/audit"
-import type { AuditTableProps } from "@/types/components"
+import type { AuditTableProps } from "@/types"
 
 /** The audit-log table body: the 6-column header row + four async branches. */
 export function AuditTable({

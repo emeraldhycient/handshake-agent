@@ -1,4 +1,4 @@
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 /** Transaction-capability scope options for the metrics filter. */
 export const CAPABILITY_OPTIONS = [

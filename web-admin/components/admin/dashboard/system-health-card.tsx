@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { FeatureCard } from "@/components/admin/feature-card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fmtInt, healthRowFrom } from "@/lib/dashboard/format"
-import type { DashboardOpsCardProps } from "@/types/components"
+import type { DashboardOpsCardProps } from "@/types"
 
 /**
  * System-health card — wired to `MetricsOps.systemHealth`. Four async branches:

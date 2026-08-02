@@ -3,7 +3,7 @@ import { AdminRowActions } from "@/components/admin/admin-row-actions"
 import { initialsOf } from "@/lib/avatar"
 import { AVATAR_STRIPE } from "@/constants/admins"
 import { formatLastLogin, roleDot } from "@/lib/admins/format"
-import type { AdminRowProps } from "@/types/components"
+import type { AdminRowProps } from "@/types"
 
 /**
  * One admin table row (design line 6). The sensitive row actions (change role, suspend

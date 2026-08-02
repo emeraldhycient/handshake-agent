@@ -1,7 +1,7 @@
 "use client"
 
 import { EDIT_ICON } from "@/constants/limits"
-import type { LimitLeafRowProps } from "@/types/components"
+import type { LimitLeafRowProps } from "@/types"
 
 /**
  * One key/value row. The edit pencil shows ONLY when the row is backed by an enforced,

@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import type { MetricsErrorProps } from "@/types/components"
+import type { MetricsErrorProps } from "@/types"
 
 /** Loading branch — the KPI grid + two-column body as pulsing skeletons. */
 export function MetricsSkeleton() {

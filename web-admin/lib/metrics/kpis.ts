@@ -1,7 +1,7 @@
 import type { DashboardSummary } from "@handshake-agent/contracts"
 
 import { formatMoneyList } from "@/lib/format"
-import type { KpiTileProps } from "@/types/components"
+import type { KpiTileProps } from "@/types"
 
 /** Format a [0,1] rate as a one-decimal percentage (0.925 → "92.5%"). */
 export function formatPct(rate: number): string {

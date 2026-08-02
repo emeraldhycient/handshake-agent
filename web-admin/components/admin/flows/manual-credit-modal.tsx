@@ -21,7 +21,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
-import type { ManualCreditModalProps } from "@/types/components"
+import type { ManualCreditModalProps } from "@/types"
 
 export function ManualCreditModal({
   open,

@@ -1,6 +1,6 @@
 import type { AdminPermissionRecord } from "@handshake-agent/contracts"
 
-import type { PermissionMatrixLevel } from "@/types/components"
+import type { PermissionMatrixLevel } from "@/types"
 
 /** The actions that count as "elevated" (beyond read) for the full/read split. */
 export const ELEVATED_ACTIONS: ReadonlySet<AdminPermissionRecord["action"]> =

@@ -4,11 +4,7 @@
  * paired with an explicit status word.
  */
 import type { MetricsRangeQuery, OpsJob } from "@handshake-agent/contracts"
-import type {
-  BackfillStatus,
-  EngineLedgerRow,
-  OpsHealth,
-} from "@/types/components"
+import type { BackfillStatus, EngineLedgerRow, OpsHealth } from "@/types"
 
 /** The dot / status-label text token for a health status. */
 export const HEALTH_TEXT: Record<OpsHealth, string> = {

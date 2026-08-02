@@ -1,4 +1,4 @@
-import type { AdminStatusTransition } from "@/types/components"
+import type { AdminStatusTransition } from "@/types"
 
 /**
  * The settable status transitions offered per current admin status (only statuses

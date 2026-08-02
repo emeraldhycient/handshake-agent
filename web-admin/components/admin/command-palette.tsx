@@ -16,7 +16,7 @@ import { Search } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { CommandResult } from "@/components/admin/command-palette/command-result"
 import { useCommandPalette } from "@/lib/hooks/use-command-palette"
-import type { CommandPaletteProps } from "@/types/components"
+import type { CommandPaletteProps } from "@/types"
 
 export function CommandPalette(props: CommandPaletteProps) {
   const c = useCommandPalette(props)

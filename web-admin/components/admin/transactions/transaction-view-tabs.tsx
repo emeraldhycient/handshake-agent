@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { TX_VIEWS, VIEW_COUNT_KEY } from "@/constants/transactions"
-import type { TransactionViewTabsProps } from "@/types/components"
+import type { TransactionViewTabsProps } from "@/types"
 
 /** The four view tabs (with count pills) + the id/hash/ref search input. */
 export function TransactionViewTabs({

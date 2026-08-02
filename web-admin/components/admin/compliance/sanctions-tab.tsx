@@ -10,7 +10,7 @@ import {
 } from "@/components/admin/compliance/compliance-shells"
 import { VERDICT_VARIANT } from "@/constants/compliance"
 import { formatDate } from "@/lib/compliance/format"
-import type { SanctionsCardProps } from "@/types/components"
+import type { SanctionsCardProps } from "@/types"
 
 /** A screening-run row rendered as the design's match card (red danger mark on a hit). */
 function SanctionsCard({ record }: SanctionsCardProps) {

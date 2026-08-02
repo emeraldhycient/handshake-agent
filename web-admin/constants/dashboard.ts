@@ -8,7 +8,7 @@ import type {
   ChangeRequestKind,
   ProviderHealth,
 } from "@handshake-agent/contracts"
-import type { DashboardRangeId } from "@/types/components"
+import type { DashboardRangeId } from "@/types"
 
 // Volume-chart capability hues (design logic.js line 2 — NOT theme-swapped).
 export const VOL_COLORS = {

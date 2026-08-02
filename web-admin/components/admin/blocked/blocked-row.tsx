@@ -3,7 +3,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { BLOCKED_GRID, KIND_LABEL } from "@/constants/blocked"
 import { shortDate } from "@/lib/blocked/format"
-import type { BlockedRowProps } from "@/types/components"
+import type { BlockedRowProps } from "@/types"
 
 /** Loading placeholder for the deny-list rows (matches the row silhouette). */
 export function LoadingRows() {

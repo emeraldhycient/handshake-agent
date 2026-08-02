@@ -1,4 +1,4 @@
-import type { FlagDefinition } from "@/types/components"
+import type { FlagDefinition } from "@/types"
 
 /**
  * The flag rows. `settingKey` bridges the FE flag key → the registry dot-path

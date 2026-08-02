@@ -22,7 +22,7 @@ import { TravelRuleTab } from "@/components/admin/compliance/travel-rule-tab"
 import { ReportsTab } from "@/components/admin/compliance/reports-tab"
 import { SanctionsTab } from "@/components/admin/compliance/sanctions-tab"
 import { TABS } from "@/constants/compliance"
-import type { ComplianceTab } from "@/types/components"
+import type { ComplianceTab } from "@/types"
 
 export function CompliancePage() {
   const [active, setActive] = useState<ComplianceTab>("Events")

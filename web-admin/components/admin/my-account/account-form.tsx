@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label"
 import { useUpdateOwnProfile } from "@/lib/query/hooks"
 import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
-import type { AccountFormProps } from "@/types/components"
+import type { AccountFormProps } from "@/types"
 
 import { ReadOnlyRow } from "./read-only-row"
 

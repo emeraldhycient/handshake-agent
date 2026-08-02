@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import { formatAmount } from "@/lib/format"
 import { LEDGER_GRID } from "@/constants/transaction-detail"
-import type { TxLedgerRowProps } from "@/types/components"
+import type { TxLedgerRowProps } from "@/types"
 
 /** One double-entry ledger leg → the design's Account/Dir/Amount/Seq row. */
 export function LedgerRow({ leg }: TxLedgerRowProps) {

@@ -4,7 +4,7 @@ import {
   BalanceCard,
   BalanceCardSkeleton,
 } from "@/components/admin/treasury/balance-card"
-import type { BalanceCardsRowProps } from "@/types/components"
+import type { BalanceCardsRowProps } from "@/types"
 
 /**
  * The 4-up balance-card row (custodial hero + fiat float + FX position + exposure

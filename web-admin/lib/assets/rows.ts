@@ -1,6 +1,6 @@
 import type { AdminCatalogView } from "@handshake-agent/contracts"
 
-import type { AssetCatalogRow } from "@/types/components"
+import type { AssetCatalogRow } from "@/types"
 
 /**
  * Map a real catalog asset onto the design's row shape. Min/max + contract are not

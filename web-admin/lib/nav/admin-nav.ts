@@ -1,5 +1,5 @@
 import { NAV_GROUPS } from "@/constants/admin-nav"
-import type { NavDestination, NavGroup, NavItem } from "@/types/components"
+import type { NavDestination, NavGroup, NavItem } from "@/types"
 
 /** True iff the item's menu gate is satisfied by the granted `menus`. */
 export function itemVisible(menu: NavItem["menu"], menus: string[]): boolean {

@@ -1,7 +1,7 @@
 import { MetricsBar } from "@/components/admin/metrics-bar"
 import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
 import { formatPct } from "@/lib/metrics/kpis"
-import type { MetricsCardProps } from "@/types/components"
+import type { MetricsCardProps } from "@/types"
 
 /** Service-health card — a success-rate bar per service with total/completed/failed counts. */
 export function ServiceHealthCard({ data }: MetricsCardProps) {

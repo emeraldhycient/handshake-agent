@@ -2,7 +2,7 @@
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { ReconBreakCard } from "@/components/admin/reconciliation/recon-break-card"
-import type { ReconBreakListProps } from "@/types/components"
+import type { ReconBreakListProps } from "@/types"
 
 /** The break board: loading skeletons / error (retry) / empty / the break cards. */
 export function ReconBreakList({

@@ -35,7 +35,7 @@ import {
   Webhook,
 } from "lucide-react"
 
-import type { NavGroup } from "@/types/components"
+import type { NavGroup } from "@/types"
 
 /**
  * Design nav groups (§4.1) mapped onto the web-admin routes + the live `menu.*`

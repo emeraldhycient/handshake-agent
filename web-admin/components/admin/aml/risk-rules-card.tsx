@@ -9,7 +9,7 @@ import {
 } from "@/components/admin/aml/aml-shells"
 import { AmlRuleTypesHelp } from "@/components/admin/aml/aml-rule-types-help"
 import { thresholdFromParameters } from "@/lib/aml/format"
-import type { RiskRulesCardProps } from "@/types/components"
+import type { RiskRulesCardProps } from "@/types"
 
 /** Risk-rules card (design lines 5–8) — read-wired to `useAmlRules`. */
 export function RiskRulesCard({ onEdit }: RiskRulesCardProps) {

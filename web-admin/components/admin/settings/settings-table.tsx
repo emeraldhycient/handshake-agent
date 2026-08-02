@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SETTINGS_GRID } from "@/constants/settings"
 import { SettingsTableRow } from "@/components/admin/settings/settings-table-row"
-import type { SettingsTableProps } from "@/types/components"
+import type { SettingsTableProps } from "@/types"
 
 /**
  * The settings card — the design's 5-column grid table with its own four async branches.

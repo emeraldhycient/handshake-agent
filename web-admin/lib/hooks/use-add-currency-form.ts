@@ -10,7 +10,7 @@ import {
   ADD_CURRENCY_DEFAULTS,
   type AddCurrencyForm,
 } from "@/lib/currencies/add-currency-schema"
-import type { AddCurrencyDialogProps } from "@/types/components"
+import type { AddCurrencyDialogProps } from "@/types"
 
 /**
  * The add-currency form state: an RHF form validated by `AddCurrencyFormSchema`, re-seeded

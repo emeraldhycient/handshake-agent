@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import type { BulkTagDialogProps } from "@/types/components"
+import type { BulkTagDialogProps } from "@/types"
 
 /**
  * The bulk TAG dialog — applies an operator tag (annotation only; never changes

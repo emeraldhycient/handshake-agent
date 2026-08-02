@@ -1,7 +1,7 @@
 import { CornerDownLeft } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import type { CommandResultProps } from "@/types/components"
+import type { CommandResultProps } from "@/types"
 
 /** One result option — label + group subtitle, with the enter glyph on the highlight. */
 export function CommandResult({

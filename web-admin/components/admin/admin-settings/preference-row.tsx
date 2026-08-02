@@ -1,5 +1,5 @@
 import { Switch } from "@/components/ui/switch"
-import type { PreferenceRowProps } from "@/types/components"
+import type { PreferenceRowProps } from "@/types"
 
 /**
  * One notification-preference toggle row (markup line 8) — label/desc + the shared

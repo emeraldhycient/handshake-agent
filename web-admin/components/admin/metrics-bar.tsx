@@ -6,7 +6,7 @@
  * role="img" + an aria-label, so the figure is conveyed without relying on the
  * visual bar alone (root §13.8 — colour is never the only signal).
  */
-import type { MetricsBarProps } from "@/types/components"
+import type { MetricsBarProps } from "@/types"
 
 export function MetricsBar({ label, value, max, caption }: MetricsBarProps) {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0

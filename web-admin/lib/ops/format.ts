@@ -5,7 +5,7 @@ import {
   SERVICE_OK_FLOOR,
   SERVICE_WARN_FLOOR,
 } from "@/constants/ops"
-import type { EngineEffectRow, OpsHealth, OpsJobRow } from "@/types/components"
+import type { EngineEffectRow, OpsHealth, OpsJobRow } from "@/types"
 
 /** A latency figure → the mono "142ms" label, or an em dash when unobserved. */
 export function latencyLabel(lastLatencyMs: number | null): string {

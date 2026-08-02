@@ -1,6 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { NOT_PROVIDED } from "@/constants/user-detail"
-import type { UdDevicesTabProps } from "@/types/components"
+import type { UdDevicesTabProps } from "@/types"
 
 /**
  * The Devices tab — the user's bound/revoked devices with a per-row unbind and,

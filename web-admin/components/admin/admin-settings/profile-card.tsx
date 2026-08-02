@@ -1,5 +1,5 @@
 import { STRIPE_AVATAR } from "@/constants/admin-settings"
-import type { ProfileCardProps } from "@/types/components"
+import type { ProfileCardProps } from "@/types"
 
 /**
  * Profile card (markup line 4) — 52px striped avatar, the real displayName, email ·

@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table"
 import { STATUS_VARIANT } from "@/constants/webhooks"
 import { formatDate, truncateId } from "@/lib/webhooks/format"
-import type { WebhookQueueProps } from "@/types/components"
+import type { WebhookQueueProps } from "@/types"
 
 function LoadingRows() {
   return (

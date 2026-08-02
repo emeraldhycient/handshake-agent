@@ -1,7 +1,7 @@
 import type { SanctionsMonitoringView } from "@handshake-agent/contracts"
 
 import { MONITOR_LABELS } from "@/constants/sanctions"
-import type { SanctionsMonitorRow } from "@/types/components"
+import type { SanctionsMonitorRow } from "@/types"
 
 /** Projects the fetched monitoring view onto the ordered display rows. */
 export function toMonitorRows(

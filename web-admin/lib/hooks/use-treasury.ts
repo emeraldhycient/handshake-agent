@@ -31,7 +31,7 @@ import type {
   MakerCheckerDiffRow,
   TreasuryCard,
   TreasuryPayoutRow,
-} from "@/types/components"
+} from "@/types"
 
 /**
  * The Treasury oversight view-model: the seven live reads (custodial hero, fiat float,

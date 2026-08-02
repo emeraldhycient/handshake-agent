@@ -7,7 +7,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
-import type { DataTableColumn, DataTableProps } from "@/types/data-table"
+import type { DataTableColumn, DataTableProps } from "@/types"
 
 const ALIGN: Record<NonNullable<DataTableColumn<unknown>["align"]>, string> = {
   left: "text-left",

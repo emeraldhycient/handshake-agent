@@ -7,10 +7,7 @@
  * signal — the label carries it.
  */
 import { Badge } from "@/components/ui/badge"
-import type {
-  KycStatusBadgeProps,
-  UserStatusBadgeProps,
-} from "@/types/components"
+import type { KycStatusBadgeProps, UserStatusBadgeProps } from "@/types"
 
 type Variant = React.ComponentProps<typeof Badge>["variant"]
 

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { KNOB_OFF, KNOB_ON } from "@/constants/flags"
-import type { FlagRowProps } from "@/types/components"
+import type { FlagRowProps } from "@/types"
 
 /**
  * One flag row — row card, mono key, desc. A REGISTRY-BACKED flag renders its scope

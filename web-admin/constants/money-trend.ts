@@ -1,4 +1,4 @@
-import type { MoneyMetric } from "@/types/components"
+import type { MoneyMetric } from "@/types"
 
 /** The three money metrics the trend card can plot (segmented toggle order). */
 export const MONEY_METRICS: readonly { key: MoneyMetric; label: string }[] = [

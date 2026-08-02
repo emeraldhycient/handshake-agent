@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import type { ApprovalInboxProps } from "@/types/components"
+import type { ApprovalInboxProps } from "@/types"
 
 import { InboxZero } from "./inbox-zero"
 import { RequestCard } from "./request-card"

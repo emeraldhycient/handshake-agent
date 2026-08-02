@@ -6,7 +6,7 @@
  * is derived solely for chart geometry (pixel positions tolerate float precision).
  */
 import type { MoneySeriesMetrics } from "@handshake-agent/contracts"
-import type { MoneyMetric, MoneySeriesPoint } from "@/types/components"
+import type { MoneyMetric, MoneySeriesPoint } from "@/types"
 
 /** The exact amount of `currency` in a per-currency array, or "0" when absent. */
 function amountFor(

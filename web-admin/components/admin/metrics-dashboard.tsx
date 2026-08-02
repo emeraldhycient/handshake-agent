@@ -23,7 +23,7 @@ import {
 } from "@/components/admin/metrics/metrics-states"
 import { useMetricsDashboard } from "@/lib/hooks/use-metrics-dashboard"
 import { useCurrencyFilterOptions } from "@/lib/hooks/use-currency-filter-options"
-import type { MetricsDashboardProps } from "@/types/components"
+import type { MetricsDashboardProps } from "@/types"
 
 export function MetricsDashboard({
   gracefulOnForbidden = false,

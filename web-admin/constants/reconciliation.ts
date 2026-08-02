@@ -4,7 +4,7 @@
  * severity label and the kind label carry the state.
  */
 import type { ReconBreakKind } from "@handshake-agent/contracts"
-import type { ReconBreakSeverity } from "@/types/components"
+import type { ReconBreakSeverity } from "@/types"
 
 // The reconciler IS the manual-trigger ops job — "Run now" fires this declared job.
 export const RECONCILIATION_JOB_ID = "settlement-reconciliation"

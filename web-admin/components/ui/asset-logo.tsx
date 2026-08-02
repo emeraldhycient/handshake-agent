@@ -3,7 +3,7 @@
 import { useState } from "react"
 
 import { cn } from "@/lib/utils"
-import type { AssetLogoProps } from "@/types/components"
+import type { AssetLogoProps } from "@/types"
 
 /**
  * AssetLogo — a square asset badge that shows the provider-discovered logo image

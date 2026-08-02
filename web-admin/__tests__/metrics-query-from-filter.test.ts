@@ -4,7 +4,7 @@ import {
   metricsQueryFromFilter,
   CUSTOM_PRESET_ID,
 } from "@/lib/metrics-range"
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 const base: MetricsFilterState = {
   presetId: "30d",

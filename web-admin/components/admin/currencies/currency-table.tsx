@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { CURRENCY_GRID } from "@/constants/currencies"
-import type { CurrencyTableProps } from "@/types/components"
+import type { CurrencyTableProps } from "@/types"
 
 import { CurrencyRow } from "./currency-row"
 

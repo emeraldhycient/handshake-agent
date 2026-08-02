@@ -18,7 +18,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
-import type { MakerCheckerModalProps } from "@/types/components"
+import type { MakerCheckerModalProps } from "@/types"
 
 export function MakerCheckerModal({
   open,

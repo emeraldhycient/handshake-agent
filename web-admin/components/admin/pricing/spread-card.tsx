@@ -6,7 +6,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { SpreadTableRow } from "@/components/admin/pricing/spread-table-row"
 import { PRICING_GRID } from "@/constants/pricing"
-import type { SpreadCardProps } from "@/types/components"
+import type { SpreadCardProps } from "@/types"
 
 /**
  * The spread card: a header strip (preview-currency select + editable processing fee)

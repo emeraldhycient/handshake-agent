@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 
 import { useAdminSearch } from "@/lib/query/hooks"
 import { buildResults } from "@/lib/nav/command-search"
-import type { CommandPaletteProps, NavDestination } from "@/types/components"
+import type { CommandPaletteProps, NavDestination } from "@/types"
 
 /**
  * The ⌘K command-palette state machine: a debounced entity search merged with the

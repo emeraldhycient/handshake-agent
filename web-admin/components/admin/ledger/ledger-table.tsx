@@ -6,7 +6,7 @@ import {
   FILTER_SELECT_CLASS,
   LEDGER_GRID,
 } from "@/constants/ledger"
-import type { LedgerTableProps } from "@/types/components"
+import type { LedgerTableProps } from "@/types"
 
 import { LedgerRowLine } from "./ledger-row"
 

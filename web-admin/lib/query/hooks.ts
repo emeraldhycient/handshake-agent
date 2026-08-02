@@ -87,7 +87,7 @@ import type { LedgerHistoryQuery } from "@/lib/api/ledger"
 import type { TemplateRef } from "@/lib/api/notifications"
 import type { WebhookQuery } from "@/lib/api/webhooks"
 import { hydrateFiatDisplay } from "@/lib/format"
-import type { NavBadgeCounts } from "@/types/components"
+import type { NavBadgeCounts } from "@/types"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────

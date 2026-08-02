@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import type { ReconRunListProps } from "@/types/components"
+import type { ReconRunListProps } from "@/types"
 
 import { ReconRunRow } from "./run-row"
 
