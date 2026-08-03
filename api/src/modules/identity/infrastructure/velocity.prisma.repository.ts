@@ -11,9 +11,9 @@ import {
   TransactionType,
   VelocityCounterType,
 } from '../../../../generated/prisma/client';
-// Fix-C: reuse the ledger's toScaled for exact-decimal string accumulation so
-// the velocity repo and the gate use the same arithmetic domain.
-import { toScaled } from '../../transactions/domain/ledger';
+// Fix-C: reuse the ledger's decimal codec for exact-decimal string accumulation
+// so the velocity repo and the gate use the same arithmetic domain.
+import { fromScaled, toScaled } from '../../transactions/domain/ledger';
 import type {
   DailyUsage,
   IVelocityRepository,
@@ -75,7 +75,6 @@ export class VelocityPrismaRepository implements IVelocityRepository {
     // ledger domain, 10^18 scale) so the velocity repo uses exactly the same scale
     // as the KycGateService comparisons. No Number() on the fiat path.
     // count_24h is always an integer so Number() remains safe there.
-    const SCALE = 10n ** 18n;
     let fiatScaled = 0n;
     let txCount = 0;
 
@@ -89,10 +88,10 @@ export class VelocityPrismaRepository implements IVelocityRepository {
       }
     }
 
-    // Convert scaled bigint back to decimal string (mirrors fromScaled in ledger.ts).
+    // Convert scaled bigint back to decimal string with the ledger's own fromScaled.
     // This string is what KycGateService.assertCanTransact feeds to toScaled() for
     // the dailyFiat comparison — same scale, so no precision is lost in the round-trip.
-    return { fiatTotal: scaledToDecimalString(fiatScaled, SCALE), txCount };
+    return { fiatTotal: fromScaled(fiatScaled), txCount };
   }
 
   /**
@@ -121,14 +120,13 @@ export class VelocityPrismaRepository implements IVelocityRepository {
       select: { currentValue: true },
     });
 
-    const SCALE = 10n ** 18n;
     let fiatScaled = 0n;
     for (const row of rows) {
       const rowStr = (row.currentValue as { toString(): string }).toString();
       fiatScaled += toScaled(rowStr);
     }
 
-    return { fiatTotal: scaledToDecimalString(fiatScaled, SCALE) };
+    return { fiatTotal: fromScaled(fiatScaled) };
   }
 
   /**
@@ -151,22 +149,4 @@ export class VelocityPrismaRepository implements IVelocityRepository {
       },
     });
   }
-}
-
-/**
- * Convert a BigInt-scaled fiat value (10^18 scale) back to its exact decimal string —
- * the inverse of the ledger's toScaled(), matching fromScaled()'s formatting so the
- * gate re-scales it losslessly.
- */
-function scaledToDecimalString(scaled: bigint, scale: bigint): string {
-  const isNeg = scaled < 0n;
-  const abs = isNeg ? -scaled : scaled;
-  const whole = abs / scale;
-  const frac = abs % scale;
-  return frac === 0n
-    ? (isNeg ? '-' : '') + whole.toString()
-    : (isNeg ? '-' : '') +
-        whole.toString() +
-        '.' +
-        frac.toString().padStart(18, '0').replace(/0+$/, '');
 }
