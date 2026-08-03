@@ -176,6 +176,32 @@ export const envSchema = z
       (v) => (v === '' ? undefined : v),
       z.string().url().optional(),
     ),
+    // Extra exact CORS origins beyond WEB_APP_BASE_URL + ADMIN_APP_BASE_URL, as a
+    // comma-separated list. A surface can be reachable at more than one hostname —
+    // notably during a custom-domain cutover, where the platform subdomain must keep
+    // working while WEB_APP_BASE_URL already names the canonical domain (that variable
+    // is not CORS-only: it also builds the KYC handoff and email-verification links).
+    // Each entry must be an absolute URL; `*` is rejected here AND dropped in
+    // cors-options.ts, because a wildcard is invalid with credentials:true.
+    CORS_EXTRA_ORIGINS: z
+      .string()
+      .optional()
+      .default('')
+      .refine(
+        (raw) =>
+          raw
+            .split(',')
+            .map((origin) => origin.trim())
+            .filter((origin) => origin !== '')
+            .every(
+              (origin) =>
+                origin !== '*' && z.string().url().safeParse(origin).success,
+            ),
+        {
+          message:
+            'CORS_EXTRA_ORIGINS must be a comma-separated list of absolute URLs (never "*").',
+        },
+      ),
 
     // --- Auth cookies (Wave H — HttpOnly refresh/session cookies) ---
     // All OPTIONAL with per-cookie dev-safe defaults resolved in cookie-options.ts
