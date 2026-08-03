@@ -607,6 +607,36 @@ describe('env.schema CORS + auth-cookie keys', () => {
     ).toThrow(/ADMIN_APP_BASE_URL/);
   });
 
+  it('defaults CORS_EXTRA_ORIGINS to an empty string when omitted', () => {
+    expect(validateEnv({ ...validRaw }).CORS_EXTRA_ORIGINS).toBe('');
+  });
+
+  it('accepts a comma-separated CORS_EXTRA_ORIGINS list of absolute URLs', () => {
+    const env = validateEnv({
+      ...validRaw,
+      CORS_EXTRA_ORIGINS:
+        'https://web-production-4c9d4.up.railway.app, https://www.usehandshake.ai',
+    });
+    expect(env.CORS_EXTRA_ORIGINS).toBe(
+      'https://web-production-4c9d4.up.railway.app, https://www.usehandshake.ai',
+    );
+  });
+
+  it('throws when any CORS_EXTRA_ORIGINS entry is not an absolute URL', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        CORS_EXTRA_ORIGINS: 'https://ok.example,not-a-url',
+      }),
+    ).toThrow(/CORS_EXTRA_ORIGINS/);
+  });
+
+  it('rejects a wildcard in CORS_EXTRA_ORIGINS (invalid with credentials:true)', () => {
+    expect(() => validateEnv({ ...validRaw, CORS_EXTRA_ORIGINS: '*' })).toThrow(
+      /CORS_EXTRA_ORIGINS/,
+    );
+  });
+
   it('accepts the three SameSite values and rejects anything else', () => {
     for (const v of ['lax', 'strict', 'none'] as const) {
       expect(
