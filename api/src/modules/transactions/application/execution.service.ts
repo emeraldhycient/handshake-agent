@@ -1033,12 +1033,13 @@ export class ExecutionService {
             velocityFiatCurrency: storedQuote.fiatCurrency,
             beneficiaryId,
             walletId: wallet.id,
-            // providerRef is written atomically here because we pass idempotencyKey
-            // as the reference to createPayout (step 10). If the process crashes
-            // between the atomic write and the mergeMetadata call below,
-            // settleSellPayout can still call verifyPayout(reference) directly
-            // using the incoming webhook reference (= idempotencyKey) without
-            // relying on meta.providerRef being populated.
+            // SENTINEL, not a usable provider id: the real Flutterwave transfer
+            // id only exists after createPayout (step 10), and mergeMetadata
+            // overwrites this value with it. Seeding it with the idempotencyKey
+            // makes the crash window self-describing — if the process dies
+            // between createPayout and that mergeMetadata, settleSellPayout sees
+            // providerRef === reference, knows the id never reached us, and
+            // resolves the payout via findPayoutByReference instead.
             providerRef: idempotencyKey,
           },
           pinVerifiedAt: now,
@@ -1153,7 +1154,10 @@ export class ExecutionService {
    *   1. Load Transaction by idempotencyKey (= reference passed to createPayout).
    *   2. Idempotent path: already completed → return existing receipt.
    *   3. Guard: status must be 'settling'.
-   *   4. Verify payout with PAYMENT_PROVIDER.verifyPayout(reference).
+   *   4. Verify payout with PAYMENT_PROVIDER.verifyPayout(meta.providerRef) —
+   *      the provider's transfer id, not our reference — falling back to
+   *      findPayoutByReference(reference) when that id was never persisted.
+   *      - Unresolvable (null) → return pending, never refund.
    *      - Pending → return pending.
    *      - Successful → settleSellFinalizeAtomic.
    *      - Failed → settleSellRefundAtomic + return failed.
@@ -1187,14 +1191,38 @@ export class ExecutionService {
     }
 
     // ── Step 4: Verify payout ─────────────────────────────────────────────────
-    // Use `reference` directly (= idempotencyKey = what we passed to createPayout).
-    // meta.providerRef is set atomically in executeSell so it equals reference;
-    // using the incoming reference eliminates the providerRef-empty race window
-    // that would occur if the process crashed between the atomic write and the
-    // post-payout mergeMetadata call.
+    // `verifyPayout` is keyed by the PROVIDER's transfer id (GET /transfers/{id}),
+    // NOT by our reference: `reference` is the transaction's idempotencyKey, a
+    // UUID the provider has never issued. executeSell persists the real id into
+    // meta.providerRef via mergeMetadata once createPayout returns.
+    //
+    // Crash window: the atomic create seeds meta.providerRef with the
+    // idempotencyKey as a sentinel, BEFORE createPayout runs. If the process
+    // died between createPayout and mergeMetadata, the transfer exists at the
+    // provider but its id never reached us — the sentinel is still in place. We
+    // detect exactly that (providerRef empty, or still equal to the reference)
+    // and resolve the payout by our own merchant reference instead.
     const meta = txn.metadata as Record<string, string>;
 
-    const verifyResult = await this.paymentProvider.verifyPayout(reference);
+    const providerTransferId = meta.providerRef ?? '';
+    const providerIdIsKnown =
+      providerTransferId.length > 0 && providerTransferId !== reference;
+
+    const verifyResult = providerIdIsKnown
+      ? await this.paymentProvider.verifyPayout(providerTransferId)
+      : await this.paymentProvider.findPayoutByReference(reference);
+
+    // FUNDS-SAFETY: a payout we cannot resolve is UNKNOWN, not failed. It may
+    // still be in flight, so refunding the crypto here would hand the user both
+    // the fiat and the crypto. Stay pending — the outbox row stays open and the
+    // reconciler (or an operator) re-drives it.
+    if (verifyResult === null) {
+      this.logger.warn(
+        { transactionId: txn.id, reference },
+        'settleSellPayout: payout not found by reference — leaving pending (never refunding on an unresolved payout)',
+      );
+      return { transactionId: txn.id, status: 'pending', userId: txn.userId };
+    }
 
     if (verifyResult.status === 'pending') {
       return { transactionId: txn.id, status: 'pending', userId: txn.userId };

@@ -289,6 +289,7 @@ describe('WhatsApp inbound image → beneficiary saved — e2e (AppModule, Testc
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
 

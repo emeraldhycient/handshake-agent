@@ -146,12 +146,42 @@ export interface IPaymentProvider {
   createPayout(input: CreatePayoutInput): Promise<CreatePayoutOutput>;
 
   /**
-   * Fetches the current status of a payout by the Flutterwave transfer id
-   * (providerRef returned from `createPayout`). GET /transfers/{id}.
+   * Fetches the current status of a payout by the PROVIDER's transfer id — the
+   * `providerRef` returned from `createPayout`, NOT our merchant reference.
+   * GET /transfers/{id}.
    *
-   * Only `status === 'successful'` is the paid terminal state.
+   * Callers must pass the id they persisted from `createPayout`. Passing our
+   * own reference here produces GET /transfers/<our-uuid>, which 404s and
+   * throws — leaving a sell stuck in `settling` forever. To resolve a payout
+   * from our reference, use `findPayoutByReference`.
+   *
+   * Only `status === 'successful'` is the paid terminal state. An unrecognised
+   * provider status is reported as `'pending'`, never `'failed'` — see
+   * `findPayoutByReference`.
    */
   verifyPayout(providerRef: string): Promise<VerifyPayoutOutput>;
+
+  /**
+   * Resolves a payout by OUR merchant `reference` (the value passed to
+   * `createPayout`) rather than the provider's id. GET /transfers?reference=…
+   *
+   * This exists for the crash window in `executeSell`: the reserve + a sentinel
+   * `providerRef` are written atomically BEFORE `createPayout`, and the real
+   * provider id is persisted only afterwards. If the process dies in between,
+   * the transfer exists at the provider but its id is unknown to us — our
+   * reference is then the only key we hold.
+   *
+   * Returns `null` when no payout carries that exact reference. Absence is a
+   * normal answer, not an error, and it means "unknown", NOT "failed": the
+   * caller must keep the transaction pending rather than refund (an in-flight
+   * transfer refunded is a double-spend). Ambiguous failures (5xx, network)
+   * still throw so the caller retries.
+   *
+   * Implementations MUST match the reference exactly on the returned rows: a
+   * provider that ignored the filter would otherwise hand back an unrelated
+   * transfer and settle this sell against a stranger's payout.
+   */
+  findPayoutByReference(reference: string): Promise<VerifyPayoutOutput | null>;
 
   /**
    * Validates the Flutterwave webhook `verif-hash` header (v3 constant-time

@@ -116,6 +116,7 @@ describe('Transaction history — e2e', () => {
       verify: jest.fn(),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
 

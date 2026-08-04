@@ -121,6 +121,7 @@ describe('Profile — e2e (GET /profile)', () => {
       verify: jest.fn(),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
     const fakeSender: jest.Mocked<IWhatsAppSender> = {
@@ -317,6 +318,7 @@ describe('Profile — e2e (POST /profile/name)', () => {
       verify: jest.fn(),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
     const fakeSender: jest.Mocked<IWhatsAppSender> = {

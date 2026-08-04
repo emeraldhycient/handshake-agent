@@ -155,6 +155,7 @@ const fakePaymentProvider: IPaymentProvider = {
   verify: jest.fn(),
   createPayout: jest.fn(),
   verifyPayout: jest.fn(),
+  findPayoutByReference: jest.fn().mockResolvedValue(null),
   verifyWebhookSignature: jest.fn().mockReturnValue(true),
 };
 

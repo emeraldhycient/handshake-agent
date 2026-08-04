@@ -76,6 +76,18 @@ export class MockPaymentProvider implements IPaymentProvider {
     });
   }
 
+  findPayoutByReference(reference: string): Promise<VerifyPayoutOutput | null> {
+    // Mirrors verifyPayout: a mock payout is never terminal. Returning the
+    // pending record rather than null keeps the crash-window branch on the same
+    // "nothing is finalised" path instead of looking like a missing transfer.
+    return Promise.resolve({
+      status: 'pending',
+      amount: '0',
+      currency: 'NGN',
+      providerRef: `MOCK-FLW-PO-${reference}`,
+    });
+  }
+
   // Param omitted intentionally (still satisfies IPaymentProvider): mock mode
   // processes no real webhooks, so every signature is rejected (fail-closed).
   verifyWebhookSignature(): boolean {

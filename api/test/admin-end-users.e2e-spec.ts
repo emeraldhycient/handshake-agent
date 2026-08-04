@@ -189,6 +189,7 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
     const fakeSender: jest.Mocked<IWhatsAppSender> = {

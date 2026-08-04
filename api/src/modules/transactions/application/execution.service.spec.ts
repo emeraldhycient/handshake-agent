@@ -1694,7 +1694,11 @@ function makeSellPaymentProvider(
 ): jest.Mocked<
   Pick<
     IPaymentProvider,
-    'createCollection' | 'verify' | 'createPayout' | 'verifyPayout'
+    | 'createCollection'
+    | 'verify'
+    | 'createPayout'
+    | 'verifyPayout'
+    | 'findPayoutByReference'
   >
 > {
   const svc = {
@@ -1707,6 +1711,9 @@ function makeSellPaymentProvider(
     }),
     createPayout: jest.fn(),
     verifyPayout: jest.fn(),
+    // Crash-window lookup by OUR reference. Defaults to "not found" so a test
+    // that does not opt in cannot accidentally settle through the fallback.
+    findPayoutByReference: jest.fn().mockResolvedValue(null),
   };
 
   if (payoutThrows) {
@@ -1863,7 +1870,7 @@ describe('ExecutionService.executeSell', () => {
 
   // ── Deterministic providerRef in atomic metadata (crash-safety) ────────────
 
-  it('includes providerRef: idempotencyKey in atomic metadata write so settleSellPayout can verify without post-write mergeMetadata', async () => {
+  it('seeds providerRef with the idempotencyKey in the atomic metadata write so a crash before mergeMetadata is detectable', async () => {
     const settlementRepo = makeSettlementRepo(
       null,
       { receiptNumber: STUB_RECEIPT_NUMBER },
@@ -1875,9 +1882,12 @@ describe('ExecutionService.executeSell', () => {
 
     await svc.executeSell(SELL_BASE_INPUT);
 
-    // The atomic write must include providerRef: idempotencyKey in txnData.metadata
-    // so that if the process crashes after the write but before mergeMetadata,
-    // settleSellPayout can still call verifyPayout(reference) correctly.
+    // The atomic write seeds providerRef with the idempotencyKey. It is a
+    // SENTINEL, not a usable provider id: mergeMetadata replaces it with
+    // Flutterwave's transfer id once createPayout returns. If the process dies
+    // in between, the value still equals the reference — which is exactly how
+    // settleSellPayout recognises the crash window and resolves the payout via
+    // findPayoutByReference instead of verifyPayout(id).
     /* eslint-disable @typescript-eslint/no-unsafe-assignment */
     expect(
       settlementRepo.createSellSettlingWithReserveAtomic,
@@ -2421,20 +2431,19 @@ function makeTransactionRepoForSellSettle(
 }
 
 describe('ExecutionService.settleSellPayout', () => {
-  // ── verifyPayout uses reference directly (not meta.providerRef) ────────────
+  // ── verifyPayout is keyed by the PROVIDER's transfer id, not our reference ──
+  //
+  // `IPaymentProvider.verifyPayout(providerRef)` is documented — and implemented
+  // by FlutterwaveProvider — as GET /transfers/{id}, where {id} is Flutterwave's
+  // NUMERIC transfer id returned by createPayout. Our `reference` is the
+  // transaction's idempotencyKey (a UUID). Passing the reference there issues
+  // GET /transfers/<uuid>, which 404s on the live rail; the adapter throws, so
+  // settleSellPayout reaches NEITHER its success nor its failure branch and the
+  // settlement outbox retries forever with the user's crypto stuck in clearing.
+  // executeSell persists the real id via mergeMetadata → meta.providerRef.
 
-  it('calls verifyPayout with the incoming reference directly (not meta.providerRef) to eliminate the crash-window race', async () => {
-    // Transaction has an EMPTY providerRef in metadata to simulate a crash between
-    // the atomic write and the subsequent mergeMetadata call.
-    const crashWindowTxn: TransactionRecord = {
-      ...SETTLING_SELL_TXN,
-      metadata: {
-        ...STUB_SELL_TXN.metadata,
-        // Simulate: providerRef not yet written by post-payout mergeMetadata.
-        providerRef: '',
-      },
-    };
-    const transactionRepo = makeTransactionRepoForSellSettle(crashWindowTxn);
+  it('calls verifyPayout with the provider transfer id from meta.providerRef, not the incoming reference', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
     const paymentProvider = makeSellPaymentProvider(undefined, {
       status: 'successful',
       amount: '24600',
@@ -2446,15 +2455,135 @@ describe('ExecutionService.settleSellPayout', () => {
 
     const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
 
-    // Must succeed even with empty meta.providerRef because the reference
-    // (= SELL_IDEMPOTENCY_KEY) is used directly for verifyPayout.
     expect(result.status).toBe('completed');
-    // verifyPayout must be called with the incoming reference, NOT meta.providerRef.
-    expect(paymentProvider.verifyPayout).toHaveBeenCalledWith(
+    expect(paymentProvider.verifyPayout).toHaveBeenCalledWith(PROVIDER_REF);
+    // The UUID must never be sent to an endpoint keyed by the provider's id.
+    expect(paymentProvider.verifyPayout).not.toHaveBeenCalledWith(
       SELL_IDEMPOTENCY_KEY,
     );
-    // Ensure verifyPayout was NOT called with empty string (the crash-window fallback).
+  });
+
+  // ── Crash window: mergeMetadata never landed → look up by OUR reference ────
+  //
+  // executeSell writes metadata.providerRef = idempotencyKey in the atomic
+  // create, then OVERWRITES it with the Flutterwave id after createPayout. If
+  // the process dies in between, meta.providerRef is still the idempotencyKey
+  // and the provider's id is unknown to us — so there is nothing to pass to
+  // verifyPayout. Resolve it by our own merchant reference instead.
+
+  it('falls back to findPayoutByReference when meta.providerRef still equals the reference (crash window)', async () => {
+    const crashWindowTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: {
+        ...STUB_SELL_TXN.metadata,
+        // As written by createSellSettlingWithReserveAtomic, before mergeMetadata.
+        providerRef: SELL_IDEMPOTENCY_KEY,
+      },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(crashWindowTxn);
+    const paymentProvider = makeSellPaymentProvider();
+    paymentProvider.findPayoutByReference.mockResolvedValue({
+      status: 'successful',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({ transactionRepo, paymentProvider });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(paymentProvider.findPayoutByReference).toHaveBeenCalledWith(
+      SELL_IDEMPOTENCY_KEY,
+    );
+    // Never issue GET /transfers/<uuid> — that is the 404 this fix removes.
+    expect(paymentProvider.verifyPayout).not.toHaveBeenCalled();
+  });
+
+  it('falls back to findPayoutByReference when meta.providerRef is empty', async () => {
+    const noRefTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: { ...STUB_SELL_TXN.metadata, providerRef: '' },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(noRefTxn);
+    const paymentProvider = makeSellPaymentProvider();
+    paymentProvider.findPayoutByReference.mockResolvedValue({
+      status: 'successful',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({ transactionRepo, paymentProvider });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(paymentProvider.findPayoutByReference).toHaveBeenCalledWith(
+      SELL_IDEMPOTENCY_KEY,
+    );
     expect(paymentProvider.verifyPayout).not.toHaveBeenCalledWith('');
+  });
+
+  // FUNDS-SAFETY: "we cannot find the payout" is NOT "the payout failed". A
+  // transfer we cannot look up may still be in flight — refunding the crypto
+  // would hand the user both the NGN and the USDT. Stay pending; the outbox row
+  // stays open and an operator can adjudicate.
+  it('returns pending (never refunds) when the crash-window lookup finds no payout', async () => {
+    const crashWindowTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: {
+        ...STUB_SELL_TXN.metadata,
+        providerRef: SELL_IDEMPOTENCY_KEY,
+      },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(crashWindowTxn);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider();
+    paymentProvider.findPayoutByReference.mockResolvedValue(null);
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('pending');
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
+    expect(settlementRepo.settleSellFinalizeAtomic).not.toHaveBeenCalled();
+  });
+
+  it('crash-window lookup returning failed still refunds', async () => {
+    const crashWindowTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: {
+        ...STUB_SELL_TXN.metadata,
+        providerRef: SELL_IDEMPOTENCY_KEY,
+      },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(crashWindowTxn);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider();
+    paymentProvider.findPayoutByReference.mockResolvedValue({
+      status: 'failed',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('failed');
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledTimes(1);
   });
 
   // ── Happy path: payout successful → finalize ──────────────────────────────

@@ -287,6 +287,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

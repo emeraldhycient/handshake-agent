@@ -160,6 +160,7 @@ describe('Admin treasury oversight — e2e (AppModule, Testcontainers Postgres)'
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
     const fakeSender: jest.Mocked<IWhatsAppSender> = {

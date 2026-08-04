@@ -229,6 +229,7 @@ describe('Onboarding vertical — e2e (email → tier_1 → Sumsub → tier_2/3)
         .fn()
         .mockResolvedValue({ providerRef: 'payout_fake_ref_onboarding' }),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
 

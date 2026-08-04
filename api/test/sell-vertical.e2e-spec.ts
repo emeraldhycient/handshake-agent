@@ -169,6 +169,7 @@ function makeFakePaymentProvider(
       currency: 'NGN',
       providerRef: FAKE_FLW_PAYOUT_REF,
     }),
+    findPayoutByReference: jest.fn().mockResolvedValue(null),
     verifyWebhookSignature: jest.fn().mockReturnValue(true),
   };
 }
