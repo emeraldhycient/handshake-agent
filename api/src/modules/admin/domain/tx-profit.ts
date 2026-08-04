@@ -7,41 +7,15 @@
  * docs/go-readiness-program.md §5) — the metrics layer aggregates these per tx.
  *
  * Exact BigInt arithmetic at scale-18 (fiat is 2-dp, crypto up to 18-dp, rates can
- * be large); floats cannot represent ledger amounts without drift. Framework-free.
+ * be large); floats cannot represent ledger amounts without drift. Framework-free —
+ * the scale-18 codec it builds on imports nothing either.
  */
 
-/** Decimal places carried internally (matches the ledger's Decimal(38,18)). */
-const SCALE = 18n;
-const FACTOR = 10n ** SCALE;
-
-/** Parse a signed decimal string into a scale-18 BigInt. */
-function toScaled(value: string): bigint {
-  const negative = value.startsWith('-');
-  const unsigned = negative ? value.slice(1) : value;
-  const [intPart, fracPart = ''] = unsigned.split('.');
-  const fracPadded = (fracPart + '0'.repeat(Number(SCALE))).slice(
-    0,
-    Number(SCALE),
-  );
-  const magnitude = BigInt((intPart || '0') + fracPadded);
-  return negative ? -magnitude : magnitude;
-}
-
-/** Convert a scale-18 BigInt back to a canonical decimal string (no trailing zeros). */
-function fromScaled(scaled: bigint): string {
-  const negative = scaled < 0n;
-  const abs = negative ? -scaled : scaled;
-  const whole = abs / FACTOR;
-  const frac = abs % FACTOR;
-  if (frac === 0n) {
-    return (negative ? '-' : '') + whole.toString();
-  }
-  const fracStr = frac
-    .toString()
-    .padStart(Number(SCALE), '0')
-    .replace(/0+$/, '');
-  return `${negative ? '-' : ''}${whole.toString()}.${fracStr}`;
-}
+import {
+  SCALE_18_FACTOR,
+  fromScaled18,
+  toScaled18,
+} from '../../../core/common/decimal-scale';
 
 /** The two priced, fiat-denominated capabilities that realize a fee + spread. */
 export type TxProfitType = 'buy' | 'sell';
@@ -83,13 +57,13 @@ export interface TxProfit {
  * EXACT realized value, not the nominal.
  */
 export function computeTxProfit(input: TxProfitInput): TxProfit {
-  const fee = toScaled(input.processingFeeAmount);
-  const fiat = toScaled(input.fiatAmount);
-  const crypto = toScaled(input.cryptoAmount);
-  const base = toScaled(input.baseRate);
+  const fee = toScaled18(input.processingFeeAmount);
+  const fiat = toScaled18(input.fiatAmount);
+  const crypto = toScaled18(input.cryptoAmount);
+  const base = toScaled18(input.baseRate);
 
   // Mid-market fiat value of the crypto: (crypto × base) with one scale removed.
-  const midValue = (crypto * base) / FACTOR;
+  const midValue = (crypto * base) / SCALE_18_FACTOR;
 
   const spread =
     input.type === 'buy'
@@ -97,8 +71,8 @@ export function computeTxProfit(input: TxProfitInput): TxProfit {
       : midValue - (fiat + fee); // mid − fiatBeforeFee
 
   return {
-    fee: fromScaled(fee),
-    spread: fromScaled(spread),
-    profit: fromScaled(fee + spread),
+    fee: fromScaled18(fee),
+    spread: fromScaled18(spread),
+    profit: fromScaled18(fee + spread),
   };
 }
