@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { CHANNEL_CLASS, CHANNEL_LABEL } from "@/constants/templates"
-import type { TemplateCardProps } from "@/types/components"
+import type { TemplateCardProps } from "@/types"
 
 /**
  * One template preview card — matches the Templates.html markup exactly: a header row

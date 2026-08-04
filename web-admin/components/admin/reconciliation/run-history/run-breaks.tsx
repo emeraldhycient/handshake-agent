@@ -8,7 +8,7 @@ import {
   BREAK_STATUS_VARIANT,
   BREAK_TYPE_LABEL,
 } from "@/constants/recon-run-history"
-import type { RunBreaksProps } from "@/types/components"
+import type { RunBreaksProps } from "@/types"
 
 /** The detected breaks for one expanded run (lazily fetched on expand). */
 export function RunBreaks({ runId, onAct }: RunBreaksProps) {

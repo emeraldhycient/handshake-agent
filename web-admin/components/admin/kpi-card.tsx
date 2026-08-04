@@ -8,7 +8,7 @@
  * success/warn delta chip. Numbers are tabular (`.tnum`).
  */
 import { cn } from "@/lib/utils"
-import type { KpiCardProps } from "@/types/components"
+import type { KpiCardProps } from "@/types"
 
 export function KpiCard({
   label,

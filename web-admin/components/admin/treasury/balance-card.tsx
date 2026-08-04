@@ -2,7 +2,7 @@
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { DOT_CLASS, HERO_GRADIENT } from "@/constants/treasury"
-import type { BalanceCardProps } from "@/types/components"
+import type { BalanceCardProps } from "@/types"
 
 /** A single balance tile — the hero variant carries the dark-green gradient. */
 export function BalanceCard({ card }: BalanceCardProps) {

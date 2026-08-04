@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { NativeSelect } from "@/components/ui/native-select"
 import { LimitLeafRow } from "@/components/admin/limits/limit-leaf-row"
-import type { LimitsBoardProps } from "@/types/components"
+import type { LimitsBoardProps } from "@/types"
 
 /** The limits data board: the tier tabs + currency selector over the amount/velocity cards. */
 export function LimitsBoard({

@@ -1,4 +1,4 @@
-import type { UdLimitsCurrencyChipsProps } from "@/types/components"
+import type { UdLimitsCurrencyChipsProps } from "@/types"
 
 /**
  * The Limits tab's fiat-scope chip row — one chip per catalog fiat; the active

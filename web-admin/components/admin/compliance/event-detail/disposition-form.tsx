@@ -7,7 +7,7 @@ import {
   COMMENT_TEXTAREA_CLASS,
   DISPOSITIONS,
 } from "@/constants/compliance-event"
-import type { ComplianceDispositionFormProps } from "@/types/components"
+import type { ComplianceDispositionFormProps } from "@/types"
 
 /**
  * The disposition form — a status select + an audited comment + the Apply button. The

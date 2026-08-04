@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import type { FlagsListProps } from "@/types/components"
+import type { FlagsListProps } from "@/types"
 
 import { FlagRow } from "./flag-row"
 

@@ -9,7 +9,7 @@ import {
   STATUS_LABEL,
 } from "@/constants/notifications"
 import { eventLabel, pct, relativeTime } from "@/lib/notifications/format"
-import type { DeliveryRowProps } from "@/types/components"
+import type { DeliveryRowProps } from "@/types"
 
 /** A single delivery-log row: channel chip + template name + event·time + status pill. */
 function DeliveryRow({ entry }: DeliveryRowProps) {

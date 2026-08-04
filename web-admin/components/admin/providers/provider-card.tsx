@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge"
 import { ProviderTestButton } from "@/components/admin/provider-test-button"
 import { STATUS_VARIANT } from "@/constants/providers"
 import { providerMark } from "@/lib/providers/mark"
-import type { ProviderCardViewProps } from "@/types/components"
+import type { ProviderCardViewProps } from "@/types"
 
 import { WarningTriangleIcon } from "./provider-icons"
 

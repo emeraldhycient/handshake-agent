@@ -8,7 +8,7 @@ import { usePreviewTemplate } from "@/lib/query/hooks"
 import { toErrorMessage } from "@/lib/error-message"
 import { parseSampleVariables } from "@/lib/notifications/template-editor"
 import { TEXTAREA_CLASS } from "@/constants/template-editor"
-import type { PreviewPanelProps } from "@/types/components"
+import type { PreviewPanelProps } from "@/types"
 
 /** The live-preview panel — sample vars input + Preview button + rendered output. */
 export function PreviewPanel({

@@ -4,7 +4,7 @@ import { useMemo } from "react"
 
 import { useAdminCatalog } from "@/lib/query/hooks"
 import { knownFiatCodes } from "@/lib/format"
-import type { FilterOption } from "@/types/components"
+import type { FilterOption } from "@/types"
 
 /** The leading neutral option — an empty value omits the currency param. */
 const ALL_CURRENCIES: FilterOption = { value: "", label: "All currencies" }

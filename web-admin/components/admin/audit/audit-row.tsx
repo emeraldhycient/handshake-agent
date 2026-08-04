@@ -2,7 +2,7 @@
 
 import { GRID_COLS } from "@/constants/audit"
 import { actionChip, displayValue, formatTime } from "@/lib/audit/format"
-import type { AuditRowProps } from "@/types/components"
+import type { AuditRowProps } from "@/types"
 
 /** One rendered audit row (design body row markup — preserved 1:1). */
 export function AuditRow({ entry }: AuditRowProps) {

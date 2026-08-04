@@ -1,6 +1,6 @@
 import type { AdminMgmtAccess } from "@/lib/permissions"
 import { NEXT_STATUS } from "@/constants/admin-row-actions"
-import type { AdminStatusTransition } from "@/types/components"
+import type { AdminStatusTransition } from "@/types"
 
 /**
  * The status transitions to actually offer for an admin row: the per-status set

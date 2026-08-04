@@ -52,7 +52,7 @@ import {
   MakerCheckerModal,
   ReasonModal,
 } from "@/components/admin/flows"
-import type { TransactionDetailProps } from "@/types/components"
+import type { TransactionDetailProps } from "@/types"
 import {
   LEDGER_GRID,
   STATUS_LABEL,

@@ -12,7 +12,7 @@ import { useMemo } from "react"
 
 import { buildMatrixRows, roleLabel } from "@/lib/roles/permission-matrix"
 import { LEVEL_META } from "@/constants/role-matrix"
-import type { RolePermissionMatrixProps } from "@/types/components"
+import type { RolePermissionMatrixProps } from "@/types"
 
 export function RolePermissionMatrix({
   roles,

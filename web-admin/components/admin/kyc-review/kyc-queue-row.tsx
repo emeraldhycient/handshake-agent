@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { KYC_GRID, MISSING } from "@/constants/kyc-review"
-import type { KycQueueRowProps } from "@/types/components"
+import type { KycQueueRowProps } from "@/types"
 
 /** One queue row — the design's clickable applicant line (Kyc.html `kycRows`). */
 export function KycQueueRowLine({ row, onOpen }: KycQueueRowProps) {

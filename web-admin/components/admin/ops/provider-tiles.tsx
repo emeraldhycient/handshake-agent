@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { HEALTH_DOT, HEALTH_TEXT, PROVIDER_STATUS_LABEL } from "@/constants/ops"
 import { latencyLabel } from "@/lib/ops/format"
-import type { ProviderTilesProps } from "@/types/components"
+import type { ProviderTilesProps } from "@/types"
 
 const GRID = "mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5"
 

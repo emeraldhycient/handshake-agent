@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useEnrollMfa } from "@/lib/query/auth"
 import { ApiError } from "@/lib/api/client"
-import type { MfaEnrollDialogProps } from "@/types/components"
+import type { MfaEnrollDialogProps } from "@/types"
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message

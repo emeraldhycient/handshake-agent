@@ -8,7 +8,7 @@ import { useComplianceEvents } from "@/lib/query/hooks"
 import { CardShell, InlineError } from "@/components/admin/aml/aml-shells"
 import { CASE_STATUS_META, OPEN_STATUSES } from "@/constants/aml"
 import { caseMeta, caseTitle } from "@/lib/aml/format"
-import type { OpenCasesCardProps } from "@/types/components"
+import type { OpenCasesCardProps } from "@/types"
 
 /** Open-cases card (design lines 10–13) — read-wired to `useComplianceEvents`. */
 export function OpenCasesCard({ onDraftSar, onOpenCase }: OpenCasesCardProps) {

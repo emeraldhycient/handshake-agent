@@ -12,7 +12,7 @@ import {
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { requestTitle } from "@/lib/approvals/rows"
-import type { AprTab } from "@/types/components"
+import type { AprTab } from "@/types"
 
 /**
  * The maker-checker approval inbox state machine: resolves the awaiting-me / my-requests

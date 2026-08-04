@@ -8,11 +8,7 @@
  * chart reads regardless of the input units. Presentation only — no data fetching.
  */
 import { cn } from "@/lib/utils"
-import type {
-  ChartBar,
-  ChartBarCapability,
-  ChartBarsProps,
-} from "@/types/components"
+import type { ChartBar, ChartBarCapability, ChartBarsProps } from "@/types"
 
 /** The five capability segments, in stacking order, with their fixed design colours. */
 const CAPS: readonly {

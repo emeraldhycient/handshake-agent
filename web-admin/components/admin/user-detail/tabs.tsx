@@ -3,7 +3,7 @@
 /** UserDetailTabs — the underline tab strip that selects the active user-detail tab. */
 import { cn } from "@/lib/utils"
 import { TABS } from "@/constants/user-detail"
-import type { UserDetailTabsProps } from "@/types/components"
+import type { UserDetailTabsProps } from "@/types"
 
 export function UserDetailTabs({ tab, onTab }: UserDetailTabsProps) {
   return (

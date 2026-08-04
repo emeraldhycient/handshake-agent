@@ -2,7 +2,7 @@
  * Limits & velocity constants (design §6). The edit-pencil path, the no-key placeholder
  * for an unenforced cap (no editor — §3.6), and the three NGN KYC tiers.
  */
-import type { LimitTierId } from "@/types/components"
+import type { LimitTierId } from "@/types"
 
 /** The design's edit pencil (logic.js `editIcon`-shaped path); reused per editable row. */
 export const EDIT_ICON =

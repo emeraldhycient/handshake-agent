@@ -11,7 +11,7 @@ import { LogOut, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react
 import { cn } from "@/lib/utils"
 import { RAIL_BG } from "@/constants/admin-nav"
 import { SidebarNavList } from "@/components/admin/app-shell/sidebar-nav-list"
-import type { SidebarRailProps } from "@/types/components"
+import type { SidebarRailProps } from "@/types"
 
 export function SidebarRail({
   collapsed,

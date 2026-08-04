@@ -1,4 +1,4 @@
-import type { ReadOnlyRowProps } from "@/types/components"
+import type { ReadOnlyRowProps } from "@/types"
 
 /** One read-only identity row (label + value); role/status are changed only by an admin. */
 export function ReadOnlyRow({ label, value, capitalize }: ReadOnlyRowProps) {

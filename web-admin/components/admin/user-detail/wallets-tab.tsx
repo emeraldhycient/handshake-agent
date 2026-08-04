@@ -1,7 +1,7 @@
 import { formatCryptoAmount } from "@/lib/format"
 import { pushToast } from "@/lib/store/toast-store"
 import { Panel } from "@/components/admin/user-detail/panel"
-import type { UdWalletsTabProps } from "@/types/components"
+import type { UdWalletsTabProps } from "@/types"
 
 /**
  * The Wallets tab — real balances rendered as cards (the first is the hero gradient)

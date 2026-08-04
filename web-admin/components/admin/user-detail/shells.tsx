@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
-import type { UdErrorProps } from "@/types/components"
+import type { UdErrorProps } from "@/types"
 
 /** The user-detail page frame — centered max-width column with the design padding. */
 export function UserDetailShell({ children }: { children: ReactNode }) {

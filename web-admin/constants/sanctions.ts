@@ -7,7 +7,7 @@ import type {
   SanctionsMonitoringView,
   SanctionsRecordItem,
 } from "@handshake-agent/contracts"
-import type { SanctionsMatchDone } from "@/types/components"
+import type { SanctionsMatchDone } from "@/types"
 
 /** Verdict token + label shown in the design's Score slot. */
 export const VERDICT_META: Record<

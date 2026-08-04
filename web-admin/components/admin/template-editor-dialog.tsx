@@ -13,7 +13,7 @@
  */
 import { Dialog } from "@/components/ui/dialog"
 import { TemplateForm } from "@/components/admin/templates/editor/template-form"
-import type { TemplateEditorDialogProps } from "@/types/components"
+import type { TemplateEditorDialogProps } from "@/types"
 
 export function TemplateEditorDialog({
   open,

@@ -7,7 +7,7 @@ import {
   useAdminPreferences,
   useUpdateAdminPreferences,
 } from "@/lib/query/hooks"
-import type { AdminPreferenceKey } from "@/types/components"
+import type { AdminPreferenceKey } from "@/types"
 
 /**
  * The operator's notification-preference toggles. The ON/OFF state is DERIVED

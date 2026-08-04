@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import type { TxPanelTitleProps } from "@/types/components"
+import type { TxPanelTitleProps } from "@/types"
 
 /** Card primitive (design §5: white/--card, 1px --line, radius 16, pad 18/20). */
 export function Panel({ children }: { children: ReactNode }) {

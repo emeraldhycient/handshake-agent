@@ -9,7 +9,7 @@ import {
   SERVICE_STATUS_LABEL,
 } from "@/constants/ops"
 import { pctLabel, serviceHealth } from "@/lib/ops/format"
-import type { ServiceHealthRowProps } from "@/types/components"
+import type { ServiceHealthRowProps } from "@/types"
 
 /** One service-health row (name + success/error rate + status word + counts). */
 function ServiceHealthRow({ service }: ServiceHealthRowProps) {

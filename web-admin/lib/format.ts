@@ -10,7 +10,7 @@
  *
  * Pure — no framework, no IO. This file lives in `lib/`.
  */
-import type { CurrencyAmount } from "@/types/components"
+import type { CurrencyAmount } from "@/types"
 
 /**
  * Static display symbols for the BUILT-IN fiats (mirrors api configuration.ts

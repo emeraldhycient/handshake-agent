@@ -1,6 +1,6 @@
 "use client"
 
-import type { UsersHeaderProps } from "@/types/components"
+import type { UsersHeaderProps } from "@/types"
 
 /** Users-directory header — the title + shown/total count and CSV export. */
 export function UsersHeader({

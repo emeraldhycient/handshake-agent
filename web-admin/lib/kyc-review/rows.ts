@@ -1,7 +1,7 @@
 import type { KycQueueItem } from "@handshake-agent/contracts"
 
 import { AVA, SLA_DANGER_SECONDS, TIER_LABELS } from "@/constants/kyc-review"
-import type { KycQueueRow } from "@/types/components"
+import type { KycQueueRow } from "@/types"
 
 /** Stable non-negative hash of a string → used to pick a deterministic avatar hue. */
 export function hashString(value: string): number {

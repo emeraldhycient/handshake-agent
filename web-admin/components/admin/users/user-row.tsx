@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { FLAG_META, GRID_COLS, KYC_META } from "@/constants/users"
-import type { UserRowProps } from "@/types/components"
+import type { UserRowProps } from "@/types"
 
 /** One Users-directory row — keyboard-navigable, opens `/users/[id]`. */
 export function UserRow({

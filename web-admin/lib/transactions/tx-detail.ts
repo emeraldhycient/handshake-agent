@@ -13,7 +13,7 @@ import type {
   TxFlowSpec,
   TxRefRow,
   TxTimelineTone,
-} from "@/types/components"
+} from "@/types"
 
 /** Format an ISO timestamp for the timeline / created displays. */
 export function formatWhen(iso: string): string {

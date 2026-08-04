@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { AssetLogo } from "@/components/ui/asset-logo"
 import { ASSETS_GRID } from "@/constants/assets"
-import type { AssetRowProps } from "@/types/components"
+import type { AssetRowProps } from "@/types"
 
 /**
  * One asset row — logo + sym/name, chain, decimals, min-max, copyable contract, and the

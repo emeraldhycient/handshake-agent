@@ -1,4 +1,4 @@
-import type { LedgerIntegrityPillProps } from "@/types/components"
+import type { LedgerIntegrityPillProps } from "@/types"
 
 /**
  * The header's live sequence-integrity pill: success-tinted "OK" (or "checking") vs.

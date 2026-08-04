@@ -6,10 +6,7 @@ import {
 } from "@handshake-agent/contracts"
 
 import { ELEVATED_ACTIONS } from "@/constants/role-matrix"
-import type {
-  PermissionMatrixLevel,
-  PermissionMatrixRow,
-} from "@/types/components"
+import type { PermissionMatrixLevel, PermissionMatrixRow } from "@/types"
 
 /**
  * The access level a role has for one permission category: `full` when it holds any

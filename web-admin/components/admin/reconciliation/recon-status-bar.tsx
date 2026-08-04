@@ -2,7 +2,7 @@
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatRunTime } from "@/lib/reconciliation/format"
-import type { ReconStatusBarProps } from "@/types/components"
+import type { ReconStatusBarProps } from "@/types"
 
 /** The reconciliation-cron status bar — last/next run + open-breaks count + Run now. */
 export function ReconStatusBar({

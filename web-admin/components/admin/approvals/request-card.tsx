@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge"
 import { KIND_META } from "@/constants/approvals"
 import { diffRows, relativeAgo, requestTitle } from "@/lib/approvals/rows"
-import type { RequestCardProps } from "@/types/components"
+import type { RequestCardProps } from "@/types"
 
 import { DiffLine } from "./diff-line"
 import { OwnRequestIcon, ReasonIcon } from "./approval-icons"

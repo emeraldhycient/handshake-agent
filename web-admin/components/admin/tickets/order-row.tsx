@@ -2,7 +2,7 @@ import { StatusPill } from "@/components/admin/status-pill"
 import { EM_DASH } from "@/constants/tickets"
 import { formatFiat } from "@/lib/format"
 import { orderPillStatus } from "@/lib/tickets/orders"
-import type { OrderRowProps } from "@/types/components"
+import type { OrderRowProps } from "@/types"
 
 /** One recent-order row — ticket type / id · user · amount · status. Read-only display. */
 export function OrderRow({ order }: OrderRowProps) {

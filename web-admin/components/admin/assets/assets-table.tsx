@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { AssetRow } from "@/components/admin/assets/asset-row"
 import { ASSETS_GRID } from "@/constants/assets"
 import { assetKey } from "@/lib/assets/rows"
-import type { AssetsTableProps } from "@/types/components"
+import type { AssetsTableProps } from "@/types"
 
 /** The asset-catalog table: the 6-column header row + four async branches. */
 export function AssetsTable({

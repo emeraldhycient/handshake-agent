@@ -11,7 +11,7 @@ import { Moon, Search as SearchIcon, Sun } from "lucide-react"
 import { AccountMenu } from "@/components/admin/account-menu"
 import { EnvIndicator } from "@/components/admin/env-indicator"
 import { NotificationsMenu } from "@/components/admin/notifications-menu"
-import type { TopBarProps } from "@/types/components"
+import type { TopBarProps } from "@/types"
 
 export function TopBar({
   onOpenCmdk,

@@ -17,7 +17,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { BulkTagDialog } from "@/components/admin/users/bulk/tag-dialog"
 import { BulkMessageDialog } from "@/components/admin/users/bulk/message-dialog"
 import { useUsersBulkActions } from "@/lib/hooks/use-users-bulk-actions"
-import type { UsersBulkActionsProps } from "@/types/components"
+import type { UsersBulkActionsProps } from "@/types"
 
 export function UsersBulkActions({
   selectedIds,

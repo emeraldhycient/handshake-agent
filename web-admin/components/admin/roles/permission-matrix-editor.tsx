@@ -1,7 +1,7 @@
 import { permissionId } from "@handshake-agent/contracts"
 
 import { PERMISSION_GROUPS } from "@/lib/roles/permission-groups"
-import type { PermissionMatrixEditorProps } from "@/types/components"
+import type { PermissionMatrixEditorProps } from "@/types"
 
 /**
  * The editable permission matrix — the shared PERMISSION_CATALOG grouped by category

@@ -18,7 +18,7 @@ import type {
   ReconBreakResolution,
   ReconBreakView,
   ReconFlowStep,
-} from "@/types/components"
+} from "@/types"
 
 /**
  * The Reconciliation-page funds-safety state machine (Phases 6b–9): the live break +

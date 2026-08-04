@@ -6,7 +6,7 @@ import {
   type Role,
 } from "@handshake-agent/contracts"
 
-import type { AccessLevel } from "@/types/components"
+import type { AccessLevel } from "@/types"
 
 /** Catalog entry ids grouped by category, computed once (static constant). */
 export const CATALOG_BY_CATEGORY: ReadonlyMap<

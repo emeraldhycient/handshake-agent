@@ -3,7 +3,7 @@
 import { FeatureCard } from "@/components/admin/feature-card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { activityItemFrom } from "@/lib/dashboard/format"
-import type { DashboardOpsCardProps } from "@/types/components"
+import type { DashboardOpsCardProps } from "@/types"
 
 /**
  * Live-activity card — wired to `MetricsOps.activityFeed`. Four async branches:

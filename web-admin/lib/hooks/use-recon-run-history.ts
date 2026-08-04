@@ -10,7 +10,7 @@ import {
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
-import type { ReconActionKind, ReconPendingAction } from "@/types/components"
+import type { ReconActionKind, ReconPendingAction } from "@/types"
 
 /**
  * The durable reconciliation-run history state machine: lists persisted runs and drives

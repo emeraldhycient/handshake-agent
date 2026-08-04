@@ -8,7 +8,7 @@
  */
 import { toCsv, downloadCsv } from "@/lib/csv"
 import { cn } from "@/lib/utils"
-import type { ExportCsvButtonProps } from "@/types/components"
+import type { ExportCsvButtonProps } from "@/types"
 
 export function ExportCsvButton({
   filename,

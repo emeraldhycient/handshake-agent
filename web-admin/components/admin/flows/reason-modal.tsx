@@ -20,7 +20,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
-import type { ReasonModalProps } from "@/types/components"
+import type { ReasonModalProps } from "@/types"
 
 /** The design's five reason categories (logic.js `reasonCats`, line 401). */
 const DEFAULT_CATEGORIES = [

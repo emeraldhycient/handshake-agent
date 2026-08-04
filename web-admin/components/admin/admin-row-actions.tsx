@@ -13,7 +13,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { AdminResetMfaAction } from "@/components/admin/admin-reset-mfa-action"
 import { useAdminRowActions } from "@/lib/hooks/use-admin-row-actions"
-import type { AdminRowActionsProps } from "@/types/components"
+import type { AdminRowActionsProps } from "@/types"
 
 export function AdminRowActions({ admin, roles }: AdminRowActionsProps) {
   const {

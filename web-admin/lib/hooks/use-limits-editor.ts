@@ -20,7 +20,7 @@ import {
 } from "@/lib/limits/rows"
 import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
 import { DEFAULT_DISPLAY_FIAT } from "@/constants/currencies"
-import type { LimitEditLeaf, LimitTier, LimitTierId } from "@/types/components"
+import type { LimitEditLeaf, LimitTier, LimitTierId } from "@/types"
 
 /** The edit flow steps: value → reason → confirm (the raise is step-up-guarded server-side). */
 type LimitFlowStep = "value" | "reason" | "maker"

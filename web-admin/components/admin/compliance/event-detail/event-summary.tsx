@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { formatEventDate, severityVariant } from "@/lib/compliance/event-detail"
-import type { ComplianceEventSummaryProps } from "@/types/components"
+import type { ComplianceEventSummaryProps } from "@/types"
 
 /**
  * The event metadata section — severity/status/user/tx/provider/rule + created stamp,

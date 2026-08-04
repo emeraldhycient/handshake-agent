@@ -18,7 +18,7 @@ import {
   toCatalogRows,
   toggleDiff,
 } from "@/lib/currencies/rows"
-import type { CurrencyCatalogRow } from "@/types/components"
+import type { CurrencyCatalogRow } from "@/types"
 
 /** Currency failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

@@ -7,7 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import type { AdminsTableProps } from "@/types/components"
+import type { AdminsTableProps } from "@/types"
 
 import { AdminRow } from "./admin-row"
 

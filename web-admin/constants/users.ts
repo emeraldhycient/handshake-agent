@@ -4,7 +4,7 @@
  * component files. Colour is never the sole signal; every pill carries a label.
  */
 import type { AdminEndUserListItem } from "@handshake-agent/contracts"
-import type { UserKycStatus, UserRiskFlag } from "@/types/components"
+import type { UserKycStatus, UserRiskFlag } from "@/types"
 
 export const PAGE_SIZE = 10
 export const MAX_WIDTH = "1360px"

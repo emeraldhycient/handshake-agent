@@ -1,6 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Panel } from "@/components/admin/user-detail/panel"
-import type { UdSecurityTabProps } from "@/types/components"
+import type { UdSecurityTabProps } from "@/types"
 
 /**
  * The Security tab — PIN & authentication (the reset-directive is step-up-gated;

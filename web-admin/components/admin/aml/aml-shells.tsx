@@ -1,4 +1,4 @@
-import type { CardShellProps, InlineErrorProps } from "@/types/components"
+import type { CardShellProps, InlineErrorProps } from "@/types"
 
 /** A card shell — the design's white rounded-16 panel (padding 18px 20px). */
 export function CardShell({ children }: CardShellProps) {

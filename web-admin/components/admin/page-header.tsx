@@ -1,4 +1,4 @@
-import type { PageHeaderProps } from "@/types/components"
+import type { PageHeaderProps } from "@/types"
 
 /**
  * Canonical admin page header: the `text-[24px] font-extrabold` title + optional

@@ -16,7 +16,7 @@ import type {
   AdminEndUserSearchQuery,
   KycTier,
 } from "@handshake-agent/contracts"
-import type { UserKycStatus, UserRiskFlag } from "@/types/components"
+import type { UserKycStatus, UserRiskFlag } from "@/types"
 
 /**
  * The Users-directory view-model: search/filter/selection/keyset-cursor state, the

@@ -1,7 +1,7 @@
 "use client"
 
 import { UsersBulkActions } from "@/components/admin/users-bulk-actions"
-import type { UsersBulkBarProps } from "@/types/components"
+import type { UsersBulkBarProps } from "@/types"
 
 /**
  * The contextual bulk-actions bar (inset inside the table header) shown when rows

@@ -1,5 +1,5 @@
 import { Panel } from "@/components/admin/user-detail/panel"
-import type { UdKycReviewPanelProps } from "@/types/components"
+import type { UdKycReviewPanelProps } from "@/types"
 
 /**
  * The KYC tab's right column — the review decision (Approve is a four-eyes

@@ -8,11 +8,7 @@ import type {
   DeliveryLogStatus,
   NotificationChannel,
 } from "@handshake-agent/contracts"
-import type {
-  BroadcastOption,
-  DeliveryChannel,
-  DeliveryStatus,
-} from "@/types/components"
+import type { BroadcastOption, DeliveryChannel, DeliveryStatus } from "@/types"
 
 /**
  * Human labels for the real `BroadcastAudience` cohorts. NO fabricated reach counts:

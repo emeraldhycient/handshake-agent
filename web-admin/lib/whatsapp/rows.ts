@@ -1,6 +1,6 @@
 import type { WhatsAppConfigView } from "@handshake-agent/contracts"
 
-import type { WhatsAppHealthRow } from "@/types/components"
+import type { WhatsAppHealthRow } from "@/types"
 
 /** The mono value's text-token utility for a health-row tone (design per-row `fg`). */
 export function toneClass(tone: WhatsAppHealthRow["tone"]): string {

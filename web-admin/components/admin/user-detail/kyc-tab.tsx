@@ -1,6 +1,6 @@
 import { KycIdentityPanel } from "@/components/admin/user-detail/kyc-identity-panel"
 import { KycReviewPanel } from "@/components/admin/user-detail/kyc-review-panel"
-import type { UdKycTabProps } from "@/types/components"
+import type { UdKycTabProps } from "@/types"
 
 /**
  * The KYC tab — a two-column grid: the identity documents + liveness (left) and the

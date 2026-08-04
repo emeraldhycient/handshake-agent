@@ -4,7 +4,7 @@ import type {
 } from "@handshake-agent/contracts"
 
 import { formatAmount } from "@/lib/format"
-import type { LedgerRow } from "@/types/components"
+import type { LedgerRow } from "@/types"
 
 /**
  * Project entries onto the design's row shape (newest-first, as returned). Each row

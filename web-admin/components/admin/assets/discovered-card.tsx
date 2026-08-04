@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AssetLogo } from "@/components/ui/asset-logo"
-import type { DiscoveredCardProps } from "@/types/components"
+import type { DiscoveredCardProps } from "@/types"
 
 /** The up-arrow-into-tray glyph on the "Newly discovered" card header. */
 function DiscoveredIcon() {

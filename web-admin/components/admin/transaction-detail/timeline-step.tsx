@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import { TIMELINE_TONE } from "@/constants/transaction-detail"
 import { formatWhen, timelineTone } from "@/lib/transactions/tx-detail"
-import type { TxTimelineStepProps } from "@/types/components"
+import type { TxTimelineStepProps } from "@/types"
 
 /** One derived lifecycle event → the design's vertical stepper node. */
 export function TimelineStep({ entry, hasNext }: TxTimelineStepProps) {

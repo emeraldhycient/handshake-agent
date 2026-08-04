@@ -2,7 +2,7 @@ import type {
   AdminTxnStatus,
   AdminTxnViewCounts,
 } from "@handshake-agent/contracts"
-import type { StatusPillStatus, TransactionsView } from "@/types/components"
+import type { StatusPillStatus, TransactionsView } from "@/types"
 
 /** Type-icon `path` data — logic.js `typeIcon` (vTxns). */
 export const TYPE_ICON: Record<string, string> = {

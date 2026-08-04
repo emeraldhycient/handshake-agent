@@ -4,7 +4,7 @@
  * tint map. `on` is never here — it comes from the live `catalog.capabilities.crypto.<x>`
  * setting value.
  */
-import type { CapabilityPresentation, CapabilityTone } from "@/types/components"
+import type { CapabilityPresentation, CapabilityTone } from "@/types"
 
 export const PRESENTATION: readonly CapabilityPresentation[] = [
   {

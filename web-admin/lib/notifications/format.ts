@@ -1,6 +1,6 @@
 import type { BroadcastSchedule } from "@handshake-agent/contracts"
 
-import type { BroadcastOption } from "@/types/components"
+import type { BroadcastOption } from "@/types"
 
 /**
  * Humanize a notification event type into the design's audience/context slot

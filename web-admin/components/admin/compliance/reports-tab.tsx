@@ -18,7 +18,7 @@ import {
 } from "@/components/admin/compliance/compliance-shells"
 import { REPORT_VARIANT } from "@/constants/compliance"
 import { formatDate } from "@/lib/compliance/format"
-import type { ReportsTabProps } from "@/types/components"
+import type { ReportsTabProps } from "@/types"
 
 /** Reports tab — SAR/STR filings; a draft row exposes a Submit. */
 export function ReportsTab({ onSubmit }: ReportsTabProps) {

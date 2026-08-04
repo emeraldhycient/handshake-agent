@@ -9,7 +9,7 @@ import {
   AddPriceFormSchema,
   type AddPriceForm,
 } from "@/lib/pricing/add-price-schema"
-import type { AddPriceDialogProps } from "@/types/components"
+import type { AddPriceDialogProps } from "@/types"
 
 /**
  * View-model for the "Add a price" dialog. Owns the RHF form (asset / currency /

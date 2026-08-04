@@ -15,7 +15,7 @@ import { TxnLedger } from "@/components/admin/transactions/txn-ledger"
 import { CursorPaginator } from "@/components/admin/cursor-paginator"
 import { SEARCH_DEBOUNCE_MS } from "@/constants/transactions"
 import { buildQuery } from "@/lib/transactions/format"
-import type { TransactionsView } from "@/types/components"
+import type { TransactionsView } from "@/types"
 
 export function TransactionsPage() {
   const router = useRouter()

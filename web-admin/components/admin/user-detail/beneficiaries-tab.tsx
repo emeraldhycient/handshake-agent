@@ -1,6 +1,6 @@
 import { beneVerificationMeta } from "@/lib/users/user-detail"
 import { BANK_ICON, CRYPTO_ICON } from "@/constants/user-detail"
-import type { UdBeneficiariesTabProps } from "@/types/components"
+import type { UdBeneficiariesTabProps } from "@/types"
 
 /** The Beneficiaries tab — saved beneficiaries with a name-enquiry pill + per-row remove. */
 export function BeneficiariesTab({

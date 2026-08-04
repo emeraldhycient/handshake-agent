@@ -1,5 +1,5 @@
 import { buildKpiTiles } from "@/lib/metrics/kpis"
-import type { MetricsCardProps } from "@/types/components"
+import type { MetricsCardProps } from "@/types"
 
 import { KpiTile } from "./kpi-tile"
 

@@ -3,7 +3,7 @@ import { Panel } from "@/components/admin/user-detail/panel"
 import { VelocityBar } from "@/components/admin/user-detail/velocity-bar"
 import { LimitsCurrencyChips } from "@/components/admin/user-detail/limits-currency-chips"
 import { fmtFiat, usagePct } from "@/lib/users/user-detail"
-import type { UdLimitsTabProps } from "@/types/components"
+import type { UdLimitsTabProps } from "@/types"
 
 /**
  * The Limits tab: the effective per-tier caps (resolved from the layered config) and

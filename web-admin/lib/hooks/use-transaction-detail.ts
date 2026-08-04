@@ -17,7 +17,7 @@ import {
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { flowSpecFor, txActionError } from "@/lib/transactions/tx-detail"
-import type { TxActivePhase, TxFlowKind } from "@/types/components"
+import type { TxActivePhase, TxFlowKind } from "@/types"
 
 /**
  * View-model for the TransactionDetail screen. Owns the read query + the four

@@ -1,7 +1,7 @@
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { FLAG_DEFS } from "@/constants/flags"
-import type { MakerCheckerDiffRow, ResolvedFlag } from "@/types/components"
+import type { MakerCheckerDiffRow, ResolvedFlag } from "@/types"
 
 /**
  * Resolve each flag's effective `on`: a registry-backed flag takes the boolean value

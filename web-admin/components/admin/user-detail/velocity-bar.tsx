@@ -1,5 +1,5 @@
 import { usageBar } from "@/lib/users/user-detail"
-import type { UdVelocityBarProps } from "@/types/components"
+import type { UdVelocityBarProps } from "@/types"
 
 /** One labelled velocity bar (used / cap + a clamped, usage-tinted progress track). */
 export function VelocityBar({ label, used, cap, pct }: UdVelocityBarProps) {

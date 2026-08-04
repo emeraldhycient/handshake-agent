@@ -10,7 +10,7 @@ import {
   type AddBlockedForm,
 } from "@/lib/blocked/add-blocked-schema"
 import { toErrorMessage } from "@/lib/error-message"
-import type { AddBlockedDialogProps } from "@/types/components"
+import type { AddBlockedDialogProps } from "@/types"
 
 /**
  * View-model for the "Add to the blocked list" dialog. Owns the RHF form (value +

@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
 import { EVENT_TYPES } from "@/constants/users-bulk"
-import type { BulkMessageDialogProps } from "@/types/components"
+import type { BulkMessageDialogProps } from "@/types"
 
 /**
  * The bulk MESSAGE dialog — queues a templated broadcast (through the notifications

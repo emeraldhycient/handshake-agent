@@ -2,7 +2,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Panel, PanelTitle } from "@/components/admin/transaction-detail/panel"
 import { formatDelta } from "@/lib/format"
 import { RECON_KIND_LABEL } from "@/constants/transaction-detail"
-import type { TxReconResultProps } from "@/types/components"
+import type { TxReconResultProps } from "@/types"
 
 /**
  * The inline result of a "Re-run recon" pass (four branches): loading while the

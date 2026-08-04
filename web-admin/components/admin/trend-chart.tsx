@@ -9,7 +9,7 @@
  * "No data" note (never a blank/degenerate chart).
  */
 import { cn } from "@/lib/utils"
-import type { TrendChartProps } from "@/types/components"
+import type { TrendChartProps } from "@/types"
 
 const VIEW_W = 100
 const VIEW_H = 40

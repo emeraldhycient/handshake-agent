@@ -14,7 +14,7 @@ import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
 import { INITIAL_LAST_SYNC } from "@/constants/assets"
 import { assetEnabledKey, assetKey, toAssetRow } from "@/lib/assets/rows"
-import type { AssetCatalogRow, MakerCheckerDiffRow } from "@/types/components"
+import type { AssetCatalogRow, MakerCheckerDiffRow } from "@/types"
 
 /** Asset failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

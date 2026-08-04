@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 import { MetricsFilterBar } from "@/components/admin/metrics-filter-bar"
 

@@ -28,7 +28,7 @@ import { useAdminMe, useSubmitReport } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
 import type { ComplianceReport } from "@handshake-agent/contracts"
-import type { ComplianceReportSubmitDialogProps } from "@/types/components"
+import type { ComplianceReportSubmitDialogProps } from "@/types"
 
 function errorMessage(error: unknown): string | null {
   if (error instanceof ApiError) return error.message

@@ -3,7 +3,7 @@
 import { EngineActionModal, ReasonModal } from "@/components/admin/flows"
 import { NO_LEDGER } from "@/constants/ops"
 import { jobEffect } from "@/lib/ops/format"
-import type { OpsRunFlowProps } from "@/types/components"
+import type { OpsRunFlowProps } from "@/types"
 
 /**
  * The "Run now" flow modals for the active job: reason (audit) → engine-action → the

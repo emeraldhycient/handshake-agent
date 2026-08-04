@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { ApprovalTabsProps, AprTab } from "@/types/components"
+import type { ApprovalTabsProps, AprTab } from "@/types"
 
 /** The bucket tabs (Awaiting me · My requests); counts come from the inbox read. */
 export function ApprovalTabs({

@@ -33,7 +33,7 @@ import type {
   PricingBaseRateRow,
   PricingFlowStep,
   SpreadRow,
-} from "@/types/components"
+} from "@/types"
 
 /** Pricing failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

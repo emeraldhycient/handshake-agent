@@ -12,7 +12,7 @@ import {
   MONO_TEXTAREA_CLASS,
   REPORT_TYPES,
 } from "@/constants/compliance-report-draft"
-import type { DraftFormFieldsProps } from "@/types/components"
+import type { DraftFormFieldsProps } from "@/types"
 
 export function DraftFormFields({
   reportType,

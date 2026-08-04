@@ -11,7 +11,7 @@ import {
 } from "@/lib/compliance/report-draft"
 import { useAdminMe, useDraftReport } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import type { ComplianceReportType } from "@/types/components"
+import type { ComplianceReportType } from "@/types"
 
 /**
  * View-model for the "Draft compliance report" dialog. Owns the form state

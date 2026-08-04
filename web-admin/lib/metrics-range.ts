@@ -11,7 +11,7 @@
  */
 import type { MetricsRangeQuery } from "@handshake-agent/contracts"
 
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 

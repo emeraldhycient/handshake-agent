@@ -15,10 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
 import { coerceValue, formatValue, seedInput } from "@/lib/settings/rows"
-import type {
-  SettingValueFormProps,
-  SettingValueModalProps,
-} from "@/types/components"
+import type { SettingValueFormProps, SettingValueModalProps } from "@/types"
 
 /** The value-entry form body — mounted only while open so it seeds from `row`. */
 function SettingValueForm({ row, onContinue }: SettingValueFormProps) {

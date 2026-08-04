@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { KYC_GRID } from "@/constants/kyc-review"
-import type { KycQueueTableProps } from "@/types/components"
+import type { KycQueueTableProps } from "@/types"
 
 import { KycQueueRowLine } from "./kyc-queue-row"
 

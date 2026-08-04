@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TxnRow } from "@/components/admin/transactions/txn-row"
 import { GRID } from "@/constants/transactions"
-import type { TxnLedgerProps } from "@/types/components"
+import type { TxnLedgerProps } from "@/types"
 
 const COLUMNS = [
   "ID",

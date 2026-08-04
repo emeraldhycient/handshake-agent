@@ -10,7 +10,7 @@
  */
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
-import type { StatusPillProps, StatusPillStatus } from "@/types/components"
+import type { StatusPillProps, StatusPillStatus } from "@/types"
 
 type BadgeVariant = NonNullable<React.ComponentProps<typeof Badge>["variant"]>
 

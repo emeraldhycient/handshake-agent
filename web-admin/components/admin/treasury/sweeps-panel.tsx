@@ -2,7 +2,7 @@
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { SWEEP_STATUS } from "@/constants/treasury"
-import type { SweepsPanelProps } from "@/types/components"
+import type { SweepsPanelProps } from "@/types"
 
 /**
  * The child-address sweeps panel — per-child address + gas balance + sweep lifecycle,

@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { useWhatsAppConfig } from "@/lib/query/hooks"
 import { toneClass, wiringRows } from "@/lib/whatsapp/rows"
-import type { WhatsAppHealthRowProps } from "@/types/components"
+import type { WhatsAppHealthRowProps } from "@/types"
 
 function CheckIcon() {
   return (

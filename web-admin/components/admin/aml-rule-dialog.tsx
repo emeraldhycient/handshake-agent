@@ -11,7 +11,7 @@
  */
 import { Dialog } from "@/components/ui/dialog"
 import { AmlRuleForm } from "@/components/admin/aml/aml-rule-form"
-import type { AmlRuleDialogProps } from "@/types/components"
+import type { AmlRuleDialogProps } from "@/types"
 
 export function AmlRuleDialog({
   open,

@@ -1,6 +1,6 @@
 import { Table } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
-import type { CardShellProps, ErrorPanelProps } from "@/types/components"
+import type { CardShellProps, ErrorPanelProps } from "@/types"
 
 /** The design table shell: rounded card, hidden overflow, card2 header row. */
 export function TableCard({ children }: CardShellProps) {

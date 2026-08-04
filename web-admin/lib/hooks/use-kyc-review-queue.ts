@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { useKycQueue } from "@/lib/query/hooks"
 import { toQueueRow } from "@/lib/kyc-review/rows"
 import { PAGE_SIZE } from "@/constants/kyc-review"
-import type { KycQueueRow, KycTabId } from "@/types/components"
+import type { KycQueueRow, KycTabId } from "@/types"
 
 /**
  * The KYC review-queue data layer. Each design tab maps onto a real KYC-status bucket,

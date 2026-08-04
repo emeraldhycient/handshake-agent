@@ -20,7 +20,7 @@ import {
   RULE_TYPES,
 } from "@/constants/aml-rule"
 import type { AmlRule } from "@handshake-agent/contracts"
-import type { AmlRuleFormProps } from "@/types/components"
+import type { AmlRuleFormProps } from "@/types"
 
 /** The form body — mounted only while open, so initializers seed from `rule`. */
 export function AmlRuleForm({ rule, onClose }: AmlRuleFormProps) {

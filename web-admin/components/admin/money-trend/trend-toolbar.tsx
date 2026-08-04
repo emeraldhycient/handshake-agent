@@ -14,7 +14,7 @@ import {
 import { formatFiat } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { MONEY_METRICS } from "@/constants/money-trend"
-import type { MoneyTrendToolbarProps } from "@/types/components"
+import type { MoneyTrendToolbarProps } from "@/types"
 
 export function MoneyTrendToolbar({
   data,

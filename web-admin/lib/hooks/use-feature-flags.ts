@@ -7,7 +7,7 @@ import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { pushToast } from "@/lib/store/toast-store"
 import { toErrorMessage } from "@/lib/error-message"
 import { resolveFlags, toggleDiff } from "@/lib/flags/rows"
-import type { ResolvedFlag } from "@/types/components"
+import type { ResolvedFlag } from "@/types"
 
 /** Flag failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

@@ -35,7 +35,7 @@ import {
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { approveTargetTier } from "@/lib/users/user-detail"
 import { TABS, TIER_OVERRIDE_TARGET } from "@/constants/user-detail"
-import type { UdFlowConfig, UdFlowStep, UdTab } from "@/types/components"
+import type { UdFlowConfig, UdFlowStep, UdTab } from "@/types"
 
 /**
  * View-model for the UserDetail screen. Owns the tab state, the per-tab read

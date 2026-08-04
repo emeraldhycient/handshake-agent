@@ -20,7 +20,7 @@ import { usePathname } from "next/navigation"
 
 import { useAdminMe } from "@/lib/query/hooks"
 import { routeAccessFor, isRouteGranted } from "@/lib/route-access"
-import type { RouteGuardProps } from "@/types/components"
+import type { RouteGuardProps } from "@/types"
 
 export function RouteGuard({ children }: RouteGuardProps) {
   const pathname = usePathname()

@@ -7,7 +7,7 @@ import { useAdminMe, useOps, useRunOpsJob } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { toJobRow } from "@/lib/ops/format"
-import type { OpsJobRow, OpsRunStage } from "@/types/components"
+import type { OpsJobRow, OpsRunStage } from "@/types"
 
 /**
  * The System/ops board state + the "Run now" flow state machine. Exposes the live ops

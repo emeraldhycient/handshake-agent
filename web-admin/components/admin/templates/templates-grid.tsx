@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import type { TemplatesGridProps } from "@/types/components"
+import type { TemplatesGridProps } from "@/types"
 
 import { TemplateCard } from "./template-card"
 

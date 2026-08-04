@@ -9,7 +9,7 @@ import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
 import { toRow } from "@/lib/settings/rows"
-import type { SettingRow, SettingsFlowStep } from "@/types/components"
+import type { SettingRow, SettingsFlowStep } from "@/types"
 
 /** Config failures always surface a string toast (never null). */
 function toastError(error: unknown): string {

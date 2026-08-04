@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useStepUp } from "@/lib/query/auth"
 import { toErrorMessage } from "@/lib/error-message"
-import type { StepUpDialogProps } from "@/types/components"
+import type { StepUpDialogProps } from "@/types"
 
 export function StepUpDialog({
   open,

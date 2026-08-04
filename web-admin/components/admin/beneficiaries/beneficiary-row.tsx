@@ -7,7 +7,7 @@ import {
   typeLabel,
   verificationVariant,
 } from "@/lib/beneficiaries/rows"
-import type { BeneficiaryRowProps } from "@/types/components"
+import type { BeneficiaryRowProps } from "@/types"
 
 /**
  * One beneficiary row — icon tile · label + type · name-enquiry pill · cooling-off

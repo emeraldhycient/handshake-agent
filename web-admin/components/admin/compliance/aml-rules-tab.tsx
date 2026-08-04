@@ -8,7 +8,7 @@ import {
   LoadingRows,
   EmptyNote,
 } from "@/components/admin/compliance/compliance-shells"
-import type { AmlRulesTabProps } from "@/types/components"
+import type { AmlRulesTabProps } from "@/types"
 
 /** AML Rules tab (§6.6 risk-rule layout) — the engine rules list + edit pencil. */
 export function AmlRulesTab({ onEdit }: AmlRulesTabProps) {

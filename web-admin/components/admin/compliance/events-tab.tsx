@@ -17,7 +17,7 @@ import {
 } from "@/components/admin/compliance/compliance-shells"
 import { SEVERITY_VARIANT } from "@/constants/compliance"
 import { formatDate } from "@/lib/compliance/format"
-import type { EventsTabProps } from "@/types/components"
+import type { EventsTabProps } from "@/types"
 
 /** Events tab — the flagged-event queue; a row opens the disposition drawer. */
 export function EventsTab({ onOpen }: EventsTabProps) {

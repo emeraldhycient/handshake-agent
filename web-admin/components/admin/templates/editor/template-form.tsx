@@ -14,7 +14,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { CHANNELS, TEXTAREA_CLASS } from "@/constants/template-editor"
 import { useTemplateForm } from "@/lib/hooks/use-template-form"
-import type { TemplateFormProps } from "@/types/components"
+import type { TemplateFormProps } from "@/types"
 
 import { VariablesEditor } from "./variables-editor"
 import { PreviewPanel } from "./preview-panel"

@@ -1,6 +1,6 @@
 "use client"
 
-import type { ChainPillProps } from "@/types/components"
+import type { ChainPillProps } from "@/types"
 
 /**
  * The header hash-chain pill — reflects the on-mount verify result: a neutral

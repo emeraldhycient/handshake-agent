@@ -1,4 +1,4 @@
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 /** Fixed capability colors for the stacked/labelled volume bars (§5). */
 export const VOLUME_SEGMENTS = [

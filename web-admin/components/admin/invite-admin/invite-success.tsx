@@ -7,7 +7,7 @@
  */
 import { Button } from "@/components/ui/button"
 import { DialogFooter } from "@/components/ui/dialog"
-import type { InviteSuccessProps } from "@/types/components"
+import type { InviteSuccessProps } from "@/types"
 
 export function InviteSuccess({ email, token, onDone }: InviteSuccessProps) {
   return (

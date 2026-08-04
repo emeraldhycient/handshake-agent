@@ -1,7 +1,7 @@
 import { Wallet } from "lucide-react"
 
 import { Skeleton } from "@/components/ui/skeleton"
-import type { BeneficiariesListProps } from "@/types/components"
+import type { BeneficiariesListProps } from "@/types"
 
 import { BeneficiaryRow } from "./beneficiary-row"
 

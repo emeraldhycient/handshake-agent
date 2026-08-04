@@ -1,4 +1,4 @@
-import type { TicketOrderStatus } from "@/types/components"
+import type { TicketOrderStatus } from "@/types"
 
 /** A subtle placeholder for a missing field (design-consistent). */
 export const EM_DASH = "—"

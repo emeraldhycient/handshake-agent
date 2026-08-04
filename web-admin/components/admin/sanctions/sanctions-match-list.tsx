@@ -2,7 +2,7 @@
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { SanctionsMatchCard } from "@/components/admin/sanctions/sanctions-match-card"
-import type { SanctionsMatchListProps } from "@/types/components"
+import type { SanctionsMatchListProps } from "@/types"
 
 /** Loading placeholder for the match-card list (matches the card silhouette). */
 function LoadingMatches() {

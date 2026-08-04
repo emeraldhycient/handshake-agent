@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { MetricsFilterState } from "@/types/components"
+import type { MetricsFilterState } from "@/types"
 
 import { isFilterActive } from "./metrics-filter"
 

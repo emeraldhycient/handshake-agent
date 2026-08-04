@@ -3,7 +3,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { useSessions } from "@/lib/query/hooks"
 import { expiryLabel } from "@/lib/admin-settings/format"
-import type { SessionRowProps } from "@/types/components"
+import type { SessionRowProps } from "@/types"
 
 /** One active-session row — device (UA), IP, and expiry. Metadata only. */
 function SessionRow({ session }: SessionRowProps) {

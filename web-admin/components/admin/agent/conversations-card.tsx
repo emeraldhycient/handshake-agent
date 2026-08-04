@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { DataTable } from "@/components/shared/data-table"
 import { ConversationLogDetail } from "@/components/admin/conversation-log-detail"
 import { useConversations } from "@/lib/query/hooks"
-import type { DataTableColumn } from "@/types/data-table"
+import type { DataTableColumn } from "@/types"
 
 import { CardError, CardShell, CardSkeleton } from "./agent-card-shells"
 

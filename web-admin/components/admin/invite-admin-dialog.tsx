@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
 import { InviteSuccess } from "@/components/admin/invite-admin/invite-success"
 import { useInviteAdminForm } from "@/lib/hooks/use-invite-admin-form"
-import type { InviteAdminDialogProps } from "@/types/components"
+import type { InviteAdminDialogProps } from "@/types"
 
 export function InviteAdminDialog(props: InviteAdminDialogProps) {
   const {

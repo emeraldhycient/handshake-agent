@@ -1,7 +1,7 @@
 import type { ChangeRequest } from "@handshake-agent/contracts"
 
 import { KIND_META } from "@/constants/approvals"
-import type { ApprovalDiffRow } from "@/types/components"
+import type { ApprovalDiffRow } from "@/types"
 
 /** Compact relative-time label ("34m ago" / "2h ago" / "3d ago") from an ISO date. */
 export function relativeAgo(iso: string, now: number = Date.now()): string {

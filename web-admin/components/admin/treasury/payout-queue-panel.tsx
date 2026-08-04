@@ -1,7 +1,7 @@
 "use client"
 
 import { Skeleton } from "@/components/ui/skeleton"
-import type { PayoutQueuePanelProps } from "@/types/components"
+import type { PayoutQueuePanelProps } from "@/types"
 
 /**
  * The payout / withdrawal approval queue — real pending payouts (read-only). Large

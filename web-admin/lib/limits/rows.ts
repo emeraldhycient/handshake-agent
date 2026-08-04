@@ -7,7 +7,7 @@ import type {
   LimitLeafKind,
   LimitTier,
   LimitVelocityRow,
-} from "@/types/components"
+} from "@/types"
 
 /** Humanize a seconds duration for display (e.g. 86400 → "24h", 0 → "None"). */
 export function humanizeSeconds(s: number): string {

@@ -4,7 +4,7 @@ import type {
   AdminTxnSearchQuery,
 } from "@handshake-agent/contracts"
 import { EM_DASH, PAGE_SIZE, VIEW_STATUS } from "@/constants/transactions"
-import type { TransactionsView } from "@/types/components"
+import type { TransactionsView } from "@/types"
 
 /** Start-of-today ISO string — the "Failed today" view's lower bound (`from`). */
 export function startOfTodayIso(): string {

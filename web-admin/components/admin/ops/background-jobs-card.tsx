@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { HEALTH_PILL } from "@/constants/ops"
-import type { BackgroundJobsCardProps } from "@/types/components"
+import type { BackgroundJobsCardProps } from "@/types"
 
 /**
  * Right panel — Background jobs & cron (name + schedule/last + status pill + Run now).

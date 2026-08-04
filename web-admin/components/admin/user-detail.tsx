@@ -18,7 +18,7 @@
  * or moves money. Identity PII is last-4 only (§3.4). Table rows navigate to the
  * transaction-detail route.
  */
-import type { UserDetailProps } from "@/types/components"
+import type { UserDetailProps } from "@/types"
 import { useUserDetailScreen } from "@/lib/hooks/use-user-detail"
 import {
   UserDetailError,

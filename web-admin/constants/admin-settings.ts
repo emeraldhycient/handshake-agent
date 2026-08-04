@@ -2,7 +2,7 @@
  * Admin-settings (operator profile + preferences) constants (design §6.16). The
  * brand-green striped avatar and the three notification-preference rows.
  */
-import type { AdminPreferenceRow } from "@/types/components"
+import type { AdminPreferenceRow } from "@/types"
 
 /**
  * Striped operator avatar (§1.3 / markup line 4):

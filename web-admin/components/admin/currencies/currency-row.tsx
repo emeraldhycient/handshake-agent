@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { CURRENCY_GRID } from "@/constants/currencies"
-import type { CurrencyRowProps } from "@/types/components"
+import type { CurrencyRowProps } from "@/types"
 
 /** One catalog row — matches the design markup exactly (grid, chip, mono, pills). */
 export function CurrencyRow({ row, onToggle }: CurrencyRowProps) {

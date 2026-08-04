@@ -1,7 +1,7 @@
 "use client"
 
 import { TreasuryAlertAcknowledge } from "@/components/admin/treasury-alert-acknowledge"
-import type { TreasuryAlertBannerProps } from "@/types/components"
+import type { TreasuryAlertBannerProps } from "@/types"
 
 /**
  * The threshold-breach warning banner — surfaced from the highest-severity
