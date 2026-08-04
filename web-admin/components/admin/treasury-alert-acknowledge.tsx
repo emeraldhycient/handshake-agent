@@ -16,14 +16,8 @@ import { ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAcknowledgeAlert, useAdminMe } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { ApiError } from "@/lib/api/client"
+import { toErrorMessage } from "@/lib/error-message"
 import type { TreasuryAlertAcknowledgeProps } from "@/types/components"
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
 
 export function TreasuryAlertAcknowledge({
   alert,
@@ -47,7 +41,7 @@ export function TreasuryAlertAcknowledge({
           .then(() => undefined)
       )
     } catch (error) {
-      setLocalError(errorMessage(error))
+      setLocalError(toErrorMessage(error))
     }
   }
 
@@ -82,7 +76,7 @@ export function TreasuryAlertAcknowledge({
         onSuccess={() => {
           void stepUp
             .retry()
-            .catch((error) => setLocalError(errorMessage(error)))
+            .catch((error) => setLocalError(toErrorMessage(error)))
         }}
       />
     </div>

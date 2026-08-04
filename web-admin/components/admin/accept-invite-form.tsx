@@ -19,13 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { useAcceptInvite } from "@/lib/query/auth"
 import { AcceptInviteFormSchema, type AcceptInviteForm } from "@/lib/schemas"
-import { ApiError } from "@/lib/api/client"
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
+import { toErrorMessage } from "@/lib/error-message"
 
 export function AcceptInviteForm() {
   const router = useRouter()
@@ -53,7 +47,7 @@ export function AcceptInviteForm() {
   }
 
   const loading = isSubmitting || accept.isPending
-  const serverError = errorMessage(accept.error)
+  const serverError = toErrorMessage(accept.error)
 
   if (!token) {
     return (
