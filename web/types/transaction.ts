@@ -26,3 +26,9 @@ export interface DetailRowProps {
 export interface TransactionDetailBodyProps {
   data: TransactionStatusResponse
 }
+
+export interface TransactionDetailModalProps {
+  /** Transaction id to load, or null when the modal is closed. */
+  transactionId: string | null
+  onClose: () => void
+}

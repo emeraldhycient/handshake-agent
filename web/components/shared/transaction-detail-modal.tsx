@@ -15,12 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { TransactionDetailBody } from "@/components/shared/transaction-detail-body"
 import { useTransactionDetail } from "@/lib/query/hooks"
 import { labelFor } from "@/lib/transaction/format"
-
-export interface TransactionDetailModalProps {
-  /** Transaction id to load, or null when the modal is closed. */
-  transactionId: string | null
-  onClose: () => void
-}
+import type { TransactionDetailModalProps } from "@/types"
 
 export function TransactionDetailModal({
   transactionId,

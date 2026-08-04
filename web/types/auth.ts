@@ -37,3 +37,23 @@ export interface AuthStepHeaderProps {
   /** Supporting line under the heading. */
   subcopy: string
 }
+
+/** Props for AuthProvider — wraps the tree it rehydrates the session for. */
+export interface AuthProviderProps {
+  children: React.ReactNode
+}
+
+/** Props for RequireAuth — wraps children that require an authenticated session. */
+export interface RequireAuthProps {
+  children: React.ReactNode
+}
+
+export interface SignupSuccessProps {
+  /** Dev-only verification token — renders a shortcut link when present. */
+  devToken?: string
+}
+
+/** Props for the /verify-email route — `searchParams` is a Promise in Next 16. */
+export interface VerifyEmailPageProps {
+  searchParams: Promise<Record<string, string>>
+}

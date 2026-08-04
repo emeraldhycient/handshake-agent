@@ -19,10 +19,7 @@
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuthStore } from "@/lib/store/auth-store"
-
-interface RequireAuthProps {
-  children: React.ReactNode
-}
+import type { RequireAuthProps } from "@/types"
 
 export function RequireAuth({ children }: RequireAuthProps) {
   const router = useRouter()

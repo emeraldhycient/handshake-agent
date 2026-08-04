@@ -19,10 +19,7 @@
 import { useEffect, useRef } from "react"
 import { defaultAuthStore } from "@/lib/store/auth-store"
 import { refreshSession } from "@/lib/api/auth"
-
-interface AuthProviderProps {
-  children: React.ReactNode
-}
+import type { AuthProviderProps } from "@/types"
 
 export function AuthProvider({ children }: AuthProviderProps) {
   // Ref to avoid running the effect twice in React 18/19 Strict Mode.

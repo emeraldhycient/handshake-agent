@@ -1,5 +1,6 @@
 import { AlertTriangleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { DepositNetworkWarningProps } from "@/types"
 
 /**
  * DepositNetworkWarning — the single canonical "only send X on Y" warning shown
@@ -9,18 +10,7 @@ import { cn } from "@/lib/utils"
  * the funds permanently, so this is the highest-signal warning on the deposit
  * path: warn-token background + a warning glyph (danger is never color-alone,
  * CLAUDE.md §13.8) + role="alert" for assistive tech.
- *
- * Props are declared inline here (leaf shared primitive); the shared XxxProps
- * registry in web/types lives in another layer.
  */
-export interface DepositNetworkWarningProps {
-  /** Asset the address can receive, e.g. "USDT". */
-  asset: string
-  /** Network/standard the address is on, e.g. "TRON · TRC-20". */
-  network: string
-  className?: string
-}
-
 export function DepositNetworkWarning({
   asset,
   network,

@@ -1,6 +1,7 @@
 import { RefreshCwIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import type { QueryEmptyStateProps, QueryErrorStateProps } from "@/types"
 
 /**
  * QueryErrorState / QueryEmptyState — the single canonical error/empty branches
@@ -9,17 +10,8 @@ import { Button } from "@/components/ui/button"
  * that calls the query's refetch, so a transient network failure is recoverable
  * in-place (scenario finding: ui-consistency-states).
  *
- * Failure is high-signal → danger-token title. Props declared inline (leaf
- * shared primitives); the shared XxxProps registry lives in another layer.
+ * Failure is high-signal → danger-token title.
  */
-export interface QueryErrorStateProps {
-  /** The query's refetch — wired to the Retry button. Omit to hide Retry. */
-  onRetry?: () => void
-  title?: string
-  description?: string
-  className?: string
-}
-
 export function QueryErrorState({
   onRetry,
   title = "Couldn't load this",
@@ -49,12 +41,6 @@ export function QueryErrorState({
       )}
     </div>
   )
-}
-
-export interface QueryEmptyStateProps {
-  title?: string
-  description?: string
-  className?: string
 }
 
 export function QueryEmptyState({
