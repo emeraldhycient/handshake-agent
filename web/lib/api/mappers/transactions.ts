@@ -4,6 +4,8 @@ import type {
 } from "@handshake-agent/contracts"
 import { DISPLAY_LOCALE } from "@/lib/format"
 import { formatCryptoAmount, formatFiatAmount } from "@/lib/format/money"
+import { truncateMiddle } from "@/lib/beneficiaries/format"
+import { titleCase } from "@/lib/transaction/format"
 import type { ActivityGroup, ActivityItem, StatusTone } from "@/lib/schemas"
 
 /** Fiat code → display symbol, sourced from the `/config` fiats by the caller
@@ -50,9 +52,6 @@ const TITLE: Record<string, (asset?: string) => string> = {
   deposit: (a) => `Deposit ${a ?? ""}`.trim(),
   ticket_purchase: () => "Ticket",
 }
-
-const titleCase = (s: string) =>
-  s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ")
 
 /**
  * Row title. An internal (PayID) transfer is direction-aware — the recipient row
@@ -131,10 +130,18 @@ function subFor(
   const parts = [timeLabel(d)]
   if (it.counterparty) {
     // An inflow arrives "from" its counterparty; an outflow goes "to" it.
+    //
+    // A counterparty is not always a long chain address — for an internal
+    // transfer it is a PayID handle, which `PayIdSchema` allows to be as short
+    // as 3 chars (reaching us "@"-prefixed, so 4). `truncateMiddle` supplies
+    // the length guard the hand-rolled head/tail slices lacked: below 8 chars
+    // those slices OVERLAP and rendered the handle doubled ("@ada…@ada"), and
+    // at 8–9 they still spent an ellipsis to say nothing (or dropped a char).
+    // The 4/4 width is deliberate and unchanged — passed explicitly because it
+    // is narrower than this helper's 6/4 default (and than `shortAddress`'s
+    // 6/6): this string is a subtitle sharing one line with the timestamp.
     const prep = dir === "in" ? "from" : "to"
-    parts.push(
-      `${prep} ${it.counterparty.slice(0, 4)}…${it.counterparty.slice(-4)}`
-    )
+    parts.push(`${prep} ${truncateMiddle(it.counterparty, 4, 4)}`)
   } else if (it.fiatAmount && it.fiatCurrency)
     parts.push(
       formatFiatAmount(it.fiatAmount, fiatSymbols[it.fiatCurrency] ?? "")
