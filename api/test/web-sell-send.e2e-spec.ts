@@ -187,6 +187,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
         currency: 'NGN',
         providerRef: 'flw_ss',
       }),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

@@ -201,6 +201,7 @@ function buildSendExecutionService(
       verify: jest.fn(),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn(),
     },
     config as never,

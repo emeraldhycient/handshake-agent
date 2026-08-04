@@ -374,6 +374,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

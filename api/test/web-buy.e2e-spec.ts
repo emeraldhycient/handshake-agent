@@ -187,6 +187,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
         currency: 'NGN',
         providerRef: FAKE_FLW_REF,
       }),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

@@ -502,6 +502,18 @@ describe('FlutterwaveProvider', () => {
       expect(result.status).toBe('failed');
     });
 
+    it('does NOT coerce an unrecognised status to failed', async () => {
+      const unknownResp = {
+        ...CREATE_PAYOUT_RESPONSE,
+        data: { ...CREATE_PAYOUT_RESPONSE.data, status: 'QUEUED' },
+      };
+      http.post.mockReturnValue(of(axiosOk(unknownResp)));
+
+      const result = await provider.createPayout(PAYOUT_INPUT);
+
+      expect(result.status).toBe('pending');
+    });
+
     it('throws a descriptive error including the API message on non-2xx', async () => {
       const axiosErr = Object.assign(new Error('Bad Request'), {
         response: {
@@ -779,6 +791,225 @@ describe('FlutterwaveProvider', () => {
       await expect(provider.verifyPayout(PAYOUT_ID)).rejects.toThrow(
         'ECONNREFUSED',
       );
+    });
+
+    // ── FUNDS-SAFETY: an unrecognised status must never read as 'failed' ─────
+    //
+    // 'failed' is the REFUND trigger in ExecutionService.settleSellPayout: it
+    // returns the user's crypto from clearing. If Flutterwave reports a status
+    // we do not model (a new/undocumented value) and we coerce it to 'failed',
+    // we refund crypto for a bank transfer that may well have been paid — the
+    // user keeps both. Unknown is NOT terminal: it must stay 'pending' so the
+    // funds remain in clearing and an operator can adjudicate.
+
+    it('does NOT coerce an unrecognised status to failed (wrong-refund guard)', async () => {
+      const unknownResp = {
+        ...VERIFY_PAYOUT_RESPONSE,
+        data: { ...VERIFY_PAYOUT_RESPONSE.data, status: 'ON HOLD' },
+      };
+      http.get.mockReturnValue(of(axiosOk(unknownResp)));
+
+      const result = await provider.verifyPayout(PAYOUT_ID);
+
+      expect(result.status).not.toBe('failed');
+      expect(result.status).toBe('pending');
+    });
+
+    it('does NOT coerce an empty status to failed', async () => {
+      const emptyResp = {
+        ...VERIFY_PAYOUT_RESPONSE,
+        data: { ...VERIFY_PAYOUT_RESPONSE.data, status: '' },
+      };
+      http.get.mockReturnValue(of(axiosOk(emptyResp)));
+
+      const result = await provider.verifyPayout(PAYOUT_ID);
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('still maps the documented terminal failure states to failed', async () => {
+      for (const raw of ['FAILED', 'failed', 'Failed']) {
+        const failedResp = {
+          ...VERIFY_PAYOUT_RESPONSE,
+          data: { ...VERIFY_PAYOUT_RESPONSE.data, status: raw },
+        };
+        http.get.mockReturnValue(of(axiosOk(failedResp)));
+
+        const result = await provider.verifyPayout(PAYOUT_ID);
+
+        expect(result.status).toBe('failed');
+      }
+    });
+  });
+
+  // ── findPayoutByReference ─────────────────────────────────────────────────
+  //
+  // Lookup by OUR merchant reference, for the crash window in executeSell where
+  // the Flutterwave transfer id was never persisted (process died between
+  // createPayout and mergeMetadata). GET /transfers?reference=<ref>.
+
+  describe('findPayoutByReference', () => {
+    const REFERENCE = 'payout-ref-001';
+
+    const LIST_TRANSFERS_RESPONSE = {
+      status: 'success',
+      message: 'Transfers fetched',
+      data: [
+        {
+          id: 999001,
+          account_number: '0123456789',
+          bank_code: '044',
+          full_name: 'Jane Doe',
+          created_at: '2024-01-15T10:30:00.000Z',
+          currency: 'NGN',
+          amount: 25000,
+          fee: 45,
+          status: 'SUCCESSFUL',
+          reference: REFERENCE,
+          narration: 'Sell crypto ref payout-ref-001',
+        },
+      ],
+    };
+
+    it('GETs {base}/transfers with the reference as a query param and Bearer auth', async () => {
+      http.get.mockReturnValue(of(axiosOk(LIST_TRANSFERS_RESPONSE)));
+
+      await provider.findPayoutByReference(REFERENCE);
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      const [url, config] = http.get.mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; params: Record<string, string> },
+      ];
+      expect(url).toBe(`${BASE_URL}/transfers`);
+      expect(config.params).toEqual({ reference: REFERENCE });
+      expect(config.headers['Authorization']).toBe(`Bearer ${SECRET_KEY}`);
+    });
+
+    it('returns the matching transfer mapped to VerifyPayoutOutput', async () => {
+      http.get.mockReturnValue(of(axiosOk(LIST_TRANSFERS_RESPONSE)));
+
+      const result = await provider.findPayoutByReference(REFERENCE);
+
+      expect(result).toEqual({
+        status: 'successful',
+        amount: '25000',
+        currency: 'NGN',
+        providerRef: '999001',
+      });
+    });
+
+    // FUNDS-SAFETY: if Flutterwave were ever to IGNORE the `reference` filter,
+    // the list would come back full of unrelated transfers. Blindly taking
+    // data[0] would then settle (or refund) this sell against a STRANGER's
+    // payout. The adapter must match the reference exactly, client-side.
+    it('returns null when no row in the response carries the exact reference', async () => {
+      const otherResp = {
+        ...LIST_TRANSFERS_RESPONSE,
+        data: [
+          {
+            ...LIST_TRANSFERS_RESPONSE.data[0],
+            reference: 'someone-elses-ref',
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(otherResp)));
+
+      const result = await provider.findPayoutByReference(REFERENCE);
+
+      expect(result).toBeNull();
+    });
+
+    it('picks the exact-reference row out of a multi-row response', async () => {
+      const mixedResp = {
+        ...LIST_TRANSFERS_RESPONSE,
+        data: [
+          {
+            ...LIST_TRANSFERS_RESPONSE.data[0],
+            id: 111,
+            reference: 'other-ref-a',
+            status: 'FAILED',
+          },
+          { ...LIST_TRANSFERS_RESPONSE.data[0] },
+          {
+            ...LIST_TRANSFERS_RESPONSE.data[0],
+            id: 222,
+            reference: 'other-ref-b',
+            status: 'FAILED',
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(mixedResp)));
+
+      const result = await provider.findPayoutByReference(REFERENCE);
+
+      expect(result?.providerRef).toBe('999001');
+      expect(result?.status).toBe('successful');
+    });
+
+    it('returns null on an empty data array', async () => {
+      http.get.mockReturnValue(
+        of(axiosOk({ ...LIST_TRANSFERS_RESPONSE, data: [] })),
+      );
+
+      expect(await provider.findPayoutByReference(REFERENCE)).toBeNull();
+    });
+
+    it('returns null when data is absent or not an array', async () => {
+      http.get.mockReturnValue(of(axiosOk({ status: 'success', message: '' })));
+
+      expect(await provider.findPayoutByReference(REFERENCE)).toBeNull();
+    });
+
+    it('returns null on 404 (absence is not an error for a lookup)', async () => {
+      const axiosErr = Object.assign(new Error('Not Found'), {
+        response: {
+          status: 404,
+          data: { status: 'error', message: 'No transfer found' },
+        },
+        isAxiosError: true,
+      });
+      http.get.mockReturnValue(throwError(() => axiosErr));
+
+      expect(await provider.findPayoutByReference(REFERENCE)).toBeNull();
+    });
+
+    // A 5xx/network failure is AMBIGUOUS — it must propagate so the caller
+    // retries, never be flattened into "no such payout" (which would look like
+    // a permanently unverifiable sell).
+    it('throws on a non-404 error response', async () => {
+      const axiosErr = Object.assign(new Error('Server Error'), {
+        response: {
+          status: 500,
+          data: { status: 'error', message: 'Internal error' },
+        },
+        isAxiosError: true,
+      });
+      http.get.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.findPayoutByReference(REFERENCE)).rejects.toThrow(
+        /Internal error/,
+      );
+    });
+
+    it('re-throws network errors as-is', async () => {
+      http.get.mockReturnValue(throwError(() => new Error('ECONNREFUSED')));
+
+      await expect(provider.findPayoutByReference(REFERENCE)).rejects.toThrow(
+        'ECONNREFUSED',
+      );
+    });
+
+    it('does not coerce an unrecognised status to failed', async () => {
+      const unknownResp = {
+        ...LIST_TRANSFERS_RESPONSE,
+        data: [{ ...LIST_TRANSFERS_RESPONSE.data[0], status: 'ON HOLD' }],
+      };
+      http.get.mockReturnValue(of(axiosOk(unknownResp)));
+
+      const result = await provider.findPayoutByReference(REFERENCE);
+
+      expect(result?.status).toBe('pending');
     });
   });
 

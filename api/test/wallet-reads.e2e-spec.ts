@@ -174,6 +174,7 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
 

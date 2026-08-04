@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
@@ -91,22 +91,46 @@ interface CreateTransferResponse {
 }
 
 /**
+ * A single Flutterwave v3 transfer, as returned by both transfer read endpoints.
+ * `reference` is OUR merchant reference; `id` is Flutterwave's own transfer id.
+ */
+interface TransferRecord {
+  id: number;
+  amount: number;
+  currency: string;
+  /** Uppercase: NEW | PENDING | SUCCESSFUL | FAILED */
+  status: string;
+  reference: string;
+  [key: string]: unknown;
+}
+
+/**
  * Flutterwave v3 Transfers API — get transfer by id response.
  * GET /transfers/{id} — same shape as create, potentially with updated status.
  */
 interface GetTransferResponse {
   status: string;
   message: string;
-  data: {
-    id: number;
-    amount: number;
-    currency: string;
-    /** Uppercase: NEW | PENDING | SUCCESSFUL | FAILED */
-    status: string;
-    reference: string;
-    [key: string]: unknown;
-  };
+  data: TransferRecord;
 }
+
+/**
+ * Flutterwave v3 Transfers API — list transfers response.
+ * GET /transfers?reference=<ref> — `data` is an ARRAY (unlike GET /transfers/{id}).
+ */
+interface ListTransfersResponse {
+  status: string;
+  message: string;
+  data?: TransferRecord[];
+}
+
+/**
+ * Transfer statuses we RECOGNISE as terminal failure — the only ones allowed to
+ * trigger a refund of the user's crypto. Deliberately an allow-list: anything
+ * absent from it is treated as pending, not failed (see normalisePayoutStatus).
+ * Extend it only for a status Flutterwave documents as terminally unpaid.
+ */
+const FLUTTERWAVE_TERMINAL_FAILURE_STATUSES = new Set(['FAILED']);
 
 // ---------------------------------------------------------------------------
 // FlutterwaveProvider
@@ -126,6 +150,7 @@ interface GetTransferResponse {
  */
 @Injectable()
 export class FlutterwaveProvider implements IPaymentProvider {
+  private readonly logger = new Logger(FlutterwaveProvider.name);
   private readonly baseUrl: string;
   private readonly authHeader: string;
   private readonly webhookSecret: string;
@@ -254,15 +279,49 @@ export class FlutterwaveProvider implements IPaymentProvider {
         }),
       );
 
-      const data = response.data.data;
-      return {
-        status: this.normalisePayoutStatus(data.status),
-        amount: String(data.amount),
-        currency: data.currency,
-        providerRef: String(data.id),
-      };
+      return this.toVerifyPayoutOutput(response.data.data);
     } catch (err: unknown) {
       throw this.wrapError('verifyPayout', err);
+    }
+  }
+
+  /**
+   * Resolves a payout by OUR merchant reference — GET /transfers?reference=…
+   * (Flutterwave v3 documents `reference` as a supported filter on the list
+   * endpoint: "The merchant's unique reference for the transfer.")
+   *
+   * Used only when the transfer's provider id was never persisted (the
+   * executeSell crash window). Returns null when no transfer carries that
+   * reference; 404 is mapped to null because absence is a normal answer here.
+   */
+  async findPayoutByReference(
+    reference: string,
+  ): Promise<VerifyPayoutOutput | null> {
+    const url = `${this.baseUrl}/transfers`;
+
+    try {
+      const response = await firstValueFrom(
+        this.http.get<ListTransfersResponse>(url, {
+          headers: this.headers(),
+          params: { reference },
+        }),
+      );
+
+      const rows = response.data?.data;
+      if (!Array.isArray(rows)) return null;
+
+      // FUNDS-SAFETY: match the reference EXACTLY rather than trusting the
+      // filter. If the provider ever ignored the query param it would return
+      // the full transfer list, and taking rows[0] would settle this sell
+      // against an unrelated payout.
+      const match = rows.find((row) => row?.reference === reference);
+      return match ? this.toVerifyPayoutOutput(match) : null;
+    } catch (err: unknown) {
+      // 404 = no such transfer. Every other failure is ambiguous and must
+      // propagate so the caller retries instead of reading it as "not found".
+      const status = (err as AxiosError)?.response?.status;
+      if (status === 404) return null;
+      throw this.wrapError('findPayoutByReference', err);
     }
   }
 
@@ -364,20 +423,42 @@ export class FlutterwaveProvider implements IPaymentProvider {
     return 'failed';
   }
 
+  /** Maps a Flutterwave transfer record onto the port's VerifyPayoutOutput. */
+  private toVerifyPayoutOutput(data: TransferRecord): VerifyPayoutOutput {
+    return {
+      status: this.normalisePayoutStatus(data.status),
+      amount: String(data.amount),
+      currency: data.currency,
+      providerRef: String(data.id),
+    };
+  }
+
   /**
-   * Normalises the Flutterwave Transfers API status string (uppercase) to our port's union type.
-   * Transfers use uppercase: NEW | PENDING | SUCCESSFUL | FAILED.
-   * NEW and PENDING are intermediate — treated as 'pending'.
-   * Only SUCCESSFUL is the paid terminal state.
-   * Any unknown status is coerced to 'failed' to fail closed.
+   * Normalises a Flutterwave transfer status onto the port's three-state union.
+   * Transfers report uppercase: NEW | PENDING | SUCCESSFUL | FAILED. NEW and
+   * PENDING are intermediate; only SUCCESSFUL is the paid terminal state.
+   *
+   * FUNDS-SAFETY: `'failed'` is the REFUND trigger in
+   * `ExecutionService.settleSellPayout` — it returns the user's crypto from
+   * clearing. So only a status we RECOGNISE as terminal-failure may map to it.
+   * An unmodelled value (a new provider state, a casing/format change, an empty
+   * string) is reported as `'pending'`: the transfer may well have been paid,
+   * and refunding it would leave the user holding both the fiat and the crypto.
+   * Pending keeps the funds in clearing and the settlement outbox row open for
+   * an operator, which is the recoverable failure mode — a wrong refund is not.
    */
   private normalisePayoutStatus(
     raw: string,
   ): 'successful' | 'pending' | 'failed' {
-    const upper = raw.toUpperCase();
+    const upper = String(raw ?? '').toUpperCase();
     if (upper === 'SUCCESSFUL') return 'successful';
     if (upper === 'NEW' || upper === 'PENDING') return 'pending';
-    return 'failed';
+    if (FLUTTERWAVE_TERMINAL_FAILURE_STATUSES.has(upper)) return 'failed';
+
+    this.logger.warn(
+      `[flutterwave] unrecognised transfer status '${raw}' — treating as pending (never auto-refunding on an unknown status)`,
+    );
+    return 'pending';
   }
 
   /**

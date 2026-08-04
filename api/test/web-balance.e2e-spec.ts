@@ -142,6 +142,7 @@ describe('Web chat check_balance — e2e (AppModule, Testcontainers Postgres)', 
       verify: jest.fn(),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
 

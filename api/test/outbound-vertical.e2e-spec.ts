@@ -395,6 +395,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
         currency: 'NGN',
         providerRef: FAKE_FLW_PAYOUT_REF,
       }),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

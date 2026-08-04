@@ -178,6 +178,7 @@ describe('Admin notification templates + WhatsApp config — e2e (AppModule, Tes
       }),
       createPayout: jest.fn(),
       verifyPayout: jest.fn(),
+      findPayoutByReference: jest.fn().mockResolvedValue(null),
       verifyWebhookSignature: jest.fn().mockReturnValue(false),
     };
     const fakeSender: jest.Mocked<IWhatsAppSender> = {
