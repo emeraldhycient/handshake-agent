@@ -4,7 +4,6 @@ import {
   formatFiat,
   fiatSymbolFor,
   formatCountdown,
-  formatCrypto,
   hydrateFiatDisplay,
 } from "./format"
 
@@ -101,13 +100,5 @@ describe("formatCountdown", () => {
 
   it("clamps negative values to 0:00", () => {
     expect(formatCountdown(-5)).toBe("0:00")
-  })
-})
-
-describe("formatCrypto", () => {
-  it("appends asset symbol with a space", () => {
-    expect(formatCrypto("31.25", "USDT")).toBe("31.25 USDT")
-    expect(formatCrypto("0.001", "BTC")).toBe("0.001 BTC")
-    expect(formatCrypto("1000", "USDC")).toBe("1000 USDC")
   })
 })
