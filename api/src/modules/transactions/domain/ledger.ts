@@ -513,11 +513,21 @@ export function buildManualCreditEntries(
 // ---------------------------------------------------------------------------
 
 /**
- * Re-export `toScaled` so application-layer consumers (e.g. ProposalService,
- * ExecutionService) can perform decimal-safe comparisons using the same scale
- * factor as the ledger domain without redefining the helper (DRY — root §13.2).
+ * Re-export the decimal codec pair so consumers outside this file (e.g.
+ * ProposalService, ExecutionService, the velocity counter read/write repos) can
+ * perform decimal-safe conversions using the same scale factor as the ledger
+ * domain without redefining the helpers (DRY — root §13.2).
+ *
+ * `toScaled(fromScaled(x)) === x` for every scaled bigint; the other direction is
+ * a canonicalizing projection, not an identity (`'1.50'` renders back as `'1.5'`),
+ * so compare scaled bigints, never the rendered strings.
+ *
+ * Exporting only half of the pair is what led callers to hand-roll their own
+ * mirror of `fromScaled`. Two such mirrors are removed alongside this export;
+ * inline copies remain in ProposalService/ExecutionService and are left for a
+ * follow-up (they sit on the money path, out of scope for a dedupe change).
  */
-export { toScaled };
+export { toScaled, fromScaled };
 
 // ── Phase 1: Reserve (execute) ──────────────────────────────────────────────
 

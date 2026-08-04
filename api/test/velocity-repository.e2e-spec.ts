@@ -90,6 +90,35 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(usage.txCount).toBe(3);
   });
 
+  // ── Test 2b: fractional counter → the fractional rendering branch ─────────
+  // Every other fixture in this file is a whole number, which only ever exercises
+  // fromScaled's `frac === 0n` early return. A real counter is fractional (the
+  // reserve delta is a fiat equivalent, e.g. 6.5 USDT × 1600.45), so this pins the
+  // zero-padding + trailing-zero-strip branch that renders it. `.05` is the case
+  // that matters: without the fractional part being padded back out to 18 digits
+  // the leading zero is lost and 45000.05 would render as 45000.5 — a 10× error
+  // in the value KycGateService re-scales for the daily-cap comparison.
+  it('renders a fractional daily counter exactly, padding the leading zero', async () => {
+    const userId = await seedUser();
+    const asOf = new Date('2024-06-01T12:00:00.000Z');
+    const windowStart = new Date('2024-06-01T00:00:00.000Z');
+    const windowEnd = new Date('2024-06-02T00:00:00.000Z');
+
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_24H,
+        currentValue: '45000.05',
+        windowStart,
+        windowEnd,
+      },
+    });
+
+    const usage = await repo.getDailyUsage(userId, asOf, 'NGN');
+
+    expect(usage.fiatTotal).toBe('45000.05');
+  });
+
   // ── Test 3: expired rows (windowEnd before 24h ago) are excluded ──────────
   it('excludes rows whose windowEnd is outside the 24-h lookback (stale counters)', async () => {
     const userId = await seedUser();
@@ -366,6 +395,25 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     });
     const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
     expect(usage.fiatTotal).toBe('0');
+  });
+
+  // Same fractional-rendering guard as the daily case, for the weekly call site:
+  // the weekly cap is compared against this string after re-scaling, so a lost
+  // leading zero would understate a week's spend by 10×.
+  it('getWeeklyUsage renders a fractional 7d counter exactly, padding the leading zero', async () => {
+    const userId = await seedUser();
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_7D,
+        fiatCurrency: 'NGN',
+        currentValue: '750000.05',
+        windowStart: new Date('2024-06-05T00:00:00.000Z'),
+        windowEnd: new Date('2024-06-12T00:00:00.000Z'), // windowStart + 7d, > WEEK_ASOF
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('750000.05');
   });
 
   // ── getRecentSendCount (rolling 10-minute on-chain send count) ────────────

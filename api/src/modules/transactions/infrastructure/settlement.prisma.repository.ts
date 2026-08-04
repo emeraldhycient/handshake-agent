@@ -57,6 +57,7 @@ import {
   buildSwapFinalizeEntries,
   buildSwapRefundEntries,
   buildInternalTransferLedgerEntries,
+  fromScaled,
   toScaled,
 } from '../domain/ledger';
 import type {
@@ -1065,7 +1066,7 @@ async function decrementVelocityCounterInSettle(
       },
     },
     data: {
-      currentValue: fromScaledDecimalString(nextScaled),
+      currentValue: fromScaled(nextScaled),
     },
   });
 }
@@ -1126,20 +1127,6 @@ function deterministicUuidFromSeed(seed: string): string {
     hex.slice(16, 20),
     hex.slice(20, 32),
   ].join('-');
-}
-
-/** Reconstructs a canonical decimal string from a 10^18-scaled bigint (mirror of ledger.fromScaled). */
-function fromScaledDecimalString(scaled: bigint): string {
-  const SCALE = 10n ** 18n;
-  const isNeg = scaled < 0n;
-  const abs = isNeg ? -scaled : scaled;
-  const whole = abs / SCALE;
-  const frac = abs % SCALE;
-  if (frac === 0n) {
-    return (isNeg ? '-' : '') + whole.toString();
-  }
-  const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
-  return (isNeg ? '-' : '') + whole.toString() + '.' + fracStr;
 }
 
 // ---------------------------------------------------------------------------
