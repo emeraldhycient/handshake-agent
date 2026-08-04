@@ -13,6 +13,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { LedgerAccountType, Prisma } from '../../../../generated/prisma/client';
+import { isValidUuid } from '../../../core/common/uuid';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ILedgerRepository,
@@ -22,14 +23,6 @@ import type {
   LedgerIntegrityResult,
   LedgerSequenceIntegrityResult,
 } from '../application/ports/ledger.repository.port';
-
-/** Matches a syntactically valid UUID — a `@db.Uuid` column rejects anything else. */
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUuid(value: string): boolean {
-  return UUID_REGEX.test(value);
-}
 
 /** A Prisma Decimal exposes a canonical `toString()`. */
 function decimalToString(value: { toString(): string }): string {

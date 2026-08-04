@@ -13,6 +13,7 @@ import {
   ReconRunStatus,
   type Prisma,
 } from '../../../../generated/prisma/client';
+import { isValidUuid } from '../../../core/common/uuid';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   CompleteReconRunInput,
@@ -26,9 +27,6 @@ import type {
   RecordReconBreakInput,
   UpdateReconBreakStatusInput,
 } from '../application/ports/reconciliation.repository.port';
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const RUN_SELECT = {
   id: true,
@@ -110,7 +108,7 @@ export class ReconciliationPrismaRepository implements IReconciliationRepository
     // Keyset on (createdAt desc, id desc): resolve the cursor row's createdAt so
     // the page boundary is stable. An unknown/invalid cursor yields the first page.
     const anchor =
-      options.cursor !== undefined && UUID_RE.test(options.cursor)
+      options.cursor !== undefined && isValidUuid(options.cursor)
         ? await this.prisma.reconRun.findUnique({
             where: { id: options.cursor },
             select: { createdAt: true, id: true },
@@ -142,7 +140,7 @@ export class ReconciliationPrismaRepository implements IReconciliationRepository
   }
 
   async findRun(id: string): Promise<ReconRunRecord | null> {
-    if (!UUID_RE.test(id)) return null;
+    if (!isValidUuid(id)) return null;
     const row = await this.prisma.reconRun.findUnique({
       where: { id },
       select: RUN_SELECT,
@@ -160,7 +158,7 @@ export class ReconciliationPrismaRepository implements IReconciliationRepository
   }
 
   async findBreak(id: string): Promise<ReconBreakRecord | null> {
-    if (!UUID_RE.test(id)) return null;
+    if (!isValidUuid(id)) return null;
     const row = await this.prisma.reconBreak.findUnique({
       where: { id },
       select: BREAK_SELECT,

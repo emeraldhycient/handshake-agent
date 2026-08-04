@@ -11,6 +11,7 @@
 
 import { Injectable } from '@nestjs/common';
 
+import { isValidUuid } from '../../../core/common/uuid';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import {
   ComplianceEventType,
@@ -45,9 +46,6 @@ const EVENT_SELECT = {
   dispositionAt: true,
   createdAt: true,
 } as const;
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------------------------------------------------------------------------
 // Enum mappers (app-layer string literals → generated Prisma enums)
@@ -126,7 +124,7 @@ export class ComplianceEventPrismaRepository implements IComplianceEventReposito
     // Keyset on (createdAt, id): resolve the cursor row's createdAt so the page
     // boundary is stable. An unknown/invalid cursor yields the first page.
     const anchor =
-      page.cursor !== undefined && UUID_RE.test(page.cursor)
+      page.cursor !== undefined && isValidUuid(page.cursor)
         ? await this.prisma.complianceEvent.findUnique({
             where: { id: page.cursor },
             select: { createdAt: true, id: true },

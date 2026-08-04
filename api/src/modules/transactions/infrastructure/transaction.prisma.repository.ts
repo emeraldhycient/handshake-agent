@@ -17,6 +17,7 @@ import {
   VelocityCounterType,
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
+import { isValidUuid } from '../../../core/common/uuid';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { encodeCursor, decodeCursor } from '../domain/transaction-cursor';
 import type {
@@ -33,25 +34,6 @@ import { TransactionStatus as PrismaTransactionStatus } from '../../../../genera
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * RFC 4122 UUID pattern (versions 1–8, case-insensitive).
- * Used as a guard before any query against a `@db.Uuid` column: Postgres
- * rejects non-UUID strings with "invalid input syntax for type uuid", which
- * would surface as a 500 when e.g. a Blockradar manual-withdraw reference
- * (not a UUID) reaches findByIdempotencyKey.
- */
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Returns true when `value` is a syntactically valid UUID.
- * A false return means querying a `@db.Uuid` column with this value would
- * throw; callers must return null early rather than forwarding to Prisma.
- */
-function isValidUuid(value: string): boolean {
-  return UUID_REGEX.test(value);
-}
 
 const TRANSACTION_SELECT = {
   id: true,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
+import { isValidUuid } from '../../../core/common/uuid';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type { Prisma } from '../../../../generated/prisma/client';
 import {
@@ -32,13 +33,6 @@ const TXN_SELECT = {
   metadata: true,
   createdAt: true,
 } as const;
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
 
 /**
  * Prisma adapter for the admin TRANSACTION read repository (Phase 6b).
