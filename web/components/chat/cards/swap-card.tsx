@@ -9,7 +9,7 @@ import { ExpiringCardCTA } from "@/components/chat/cards/expiring-card-cta"
 import { useQuoteCountdown } from "@/hooks/use-quote-countdown"
 import { formatCountdown } from "@/lib/format"
 import { proposalTerminalState } from "@/lib/chat/proposal-terminal"
-import type { SwapCardProps } from "@/types/components"
+import type { SwapCardProps } from "@/types"
 
 /** Human ETA for a swap, e.g. "~2 min" / "~45 sec" / "instant". */
 function formatEta(sec: number): string {

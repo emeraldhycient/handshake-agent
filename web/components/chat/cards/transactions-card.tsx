@@ -6,7 +6,7 @@ import { useLoadMoreTransactions } from "@/lib/query/hooks"
 import { LoadMoreButton } from "@/components/shared/load-more-button"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import type { TransactionRow } from "@/lib/schemas"
-import type { TransactionsCardProps } from "@/types/components"
+import type { TransactionsCardProps } from "@/types"
 
 /**
  * TransactionsCard — chat card for a transaction-history query result.

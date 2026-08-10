@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { BrandMark } from "@/components/shared"
 import { InstallButton } from "@/components/pwa/install-button"
-import type { ChatHeaderProps } from "@/types/components"
+import type { ChatHeaderProps } from "@/types"
 
 export function ChatHeader({ className }: ChatHeaderProps) {
   return (

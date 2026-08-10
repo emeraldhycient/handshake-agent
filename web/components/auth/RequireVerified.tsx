@@ -33,7 +33,7 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuthStore } from "@/lib/store/auth-store"
 import { useMe } from "@/lib/query/auth"
-import type { RequireVerifiedProps } from "@/types/components"
+import type { RequireVerifiedProps } from "@/types"
 
 // The onboarding wizard. It resumes at the first unfinished step (deriveResumeStep),
 // so a tier-less user lands on the KYC/verify step and a PIN-less user on set-PIN.

@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { AddCryptoForm } from "@/components/chat/cards/needs-beneficiary/add-crypto-form"
-import type { SaveRecipientButtonProps } from "@/types/components"
+import type { SaveRecipientButtonProps } from "@/types"
 
 /**
  * "Save this recipient" — rendered by ReceiptCard only for a completed SEND

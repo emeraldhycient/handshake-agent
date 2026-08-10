@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { ChatMessageView } from "./chat-message"
 import { TypingIndicator } from "./typing-indicator"
-import type { ChatThreadProps } from "@/types/components"
+import type { ChatThreadProps } from "@/types"
 
 /**
  * ChatThread — scrollable message list with auto-scroll to bottom.

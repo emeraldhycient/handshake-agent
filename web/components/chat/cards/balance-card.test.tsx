@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, it, expect } from "vitest"
 import { BalanceCard } from "./balance-card"
-import type { BalanceCardProps } from "@/types/components"
+import type { BalanceCardProps } from "@/types"
 
 const baseProps: BalanceCardProps = {
   kind: "balance",

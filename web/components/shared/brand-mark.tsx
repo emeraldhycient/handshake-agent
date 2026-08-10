@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { BrandMarkProps } from "@/types/components"
+import type { BrandMarkProps } from "@/types"
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 

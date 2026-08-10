@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, it, expect, vi } from "vitest"
 import { SwapCard } from "./swap-card"
-import type { SwapCardProps } from "@/types/components"
+import type { SwapCardProps } from "@/types"
 
 const baseProps: SwapCardProps = {
   kind: "swap",

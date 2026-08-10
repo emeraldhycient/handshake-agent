@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { AssetIcon } from "@/components/shared/asset-icon"
-import type { BalanceCardProps } from "@/types/components"
+import type { BalanceCardProps } from "@/types"
 
 /**
  * BalanceCard — chat message card showing the user's portfolio snapshot.

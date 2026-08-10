@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { PinPadInner } from "@/components/chat/overlays/pin-pad-inner"
-import type { PinPadProps } from "@/types/components"
+import type { PinPadProps } from "@/types"
 
 /**
  * PinPad — full-cover PIN entry overlay. Pure event emitter: it never stores or

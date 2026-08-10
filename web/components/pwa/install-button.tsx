@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useInstallPrompt } from "@/hooks/use-install-prompt"
-import type { InstallButtonProps } from "@/types/components"
+import type { InstallButtonProps } from "@/types"
 import { InstallModal } from "./install-modal"
 
 /**

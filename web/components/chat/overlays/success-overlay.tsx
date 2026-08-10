@@ -1,6 +1,6 @@
 "use client"
 
-import type { SuccessOverlayProps } from "@/types/components"
+import type { SuccessOverlayProps } from "@/types"
 
 /**
  * SuccessOverlay — full-cover scrim with an animated success circle and text.

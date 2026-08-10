@@ -12,7 +12,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api/client"
 import { useVerifyEmail } from "@/lib/query/auth"
-import type { VerifyEmailFormProps } from "@/types/components"
+import type { VerifyEmailFormProps } from "@/types"
 
 export function VerifyEmailForm({ token }: VerifyEmailFormProps) {
   const { mutateAsync, isPending, isSuccess, error } = useVerifyEmail()

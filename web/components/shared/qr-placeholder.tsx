@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { QrPlaceholderProps } from "@/types/components"
+import type { QrPlaceholderProps } from "@/types"
 
 /**
  * CSS QR code motif ported from prototype lines 230–235.

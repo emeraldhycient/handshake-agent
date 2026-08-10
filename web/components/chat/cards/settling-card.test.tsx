@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, it, expect, vi } from "vitest"
 import { SettlingCard } from "./settling-card"
-import type { SettlingCardProps } from "@/types/components"
+import type { SettlingCardProps } from "@/types"
 
 // SettlingCard's *Live variant pulls the polling hook + store; the pure card
 // under test does not, but the module imports them at load time, so stub both.

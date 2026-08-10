@@ -21,7 +21,7 @@ import {
   applyLanguageToLivePage,
   resetToOriginal,
 } from "@/lib/i18n/google-translate"
-import type { TranslationContextValue } from "@/types/components"
+import type { TranslationContextValue } from "@/types"
 
 const DEFAULT_LANGUAGE =
   findLanguage(DEFAULT_LANGUAGE_CODE) ?? SUPPORTED_LANGUAGES[0]

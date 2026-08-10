@@ -9,7 +9,7 @@ import { ExpiringCardCTA } from "@/components/chat/cards/expiring-card-cta"
 import { useQuoteCountdown } from "@/hooks/use-quote-countdown"
 import { formatCountdown } from "@/lib/format"
 import { proposalTerminalState } from "@/lib/chat/proposal-terminal"
-import type { QuoteCardProps } from "@/types/components"
+import type { QuoteCardProps } from "@/types"
 
 /**
  * QuoteCard — chat message card for a crypto buy/send/swap quote. Orchestrator:

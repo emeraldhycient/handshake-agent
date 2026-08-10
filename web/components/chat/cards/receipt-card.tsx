@@ -3,7 +3,7 @@ import { Money } from "@/components/shared/money"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
 import { SaveRecipientButton } from "@/components/chat/cards/receipt/save-recipient-button"
-import type { ReceiptCardProps } from "@/types/components"
+import type { ReceiptCardProps } from "@/types"
 
 /**
  * ReceiptCard — chat message card confirming a completed transaction.

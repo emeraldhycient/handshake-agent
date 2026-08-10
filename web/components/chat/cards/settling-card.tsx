@@ -5,7 +5,7 @@ import { StatusPill } from "@/components/shared/status-pill"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
 import { useSettlementWatcher } from "@/hooks/use-settlement-watcher"
-import type { SettlingCardProps } from "@/types/components"
+import type { SettlingCardProps } from "@/types"
 import type { QuoteRow } from "@/lib/schemas"
 
 /**

@@ -1,7 +1,7 @@
 import { QRCodeSVG } from "qrcode.react"
 import { cn } from "@/lib/utils"
 import { QR_COLORS } from "@/lib/site"
-import type { QrCodeProps } from "@/types/components"
+import type { QrCodeProps } from "@/types"
 
 /**
  * Real, scannable QR code (client-rendered by qrcode.react — no network calls,

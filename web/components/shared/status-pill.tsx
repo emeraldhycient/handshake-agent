@@ -1,7 +1,7 @@
 import { cva } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 import type { StatusTone } from "@/lib/schemas"
-import type { StatusPillProps } from "@/types/components"
+import type { StatusPillProps } from "@/types"
 
 /**
  * Status pill with CVA tone variants mapped to design tokens.

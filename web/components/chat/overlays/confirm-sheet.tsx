@@ -14,7 +14,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { ConfirmBody } from "@/components/chat/overlays/confirm-body"
-import type { ConfirmSheetProps } from "@/types/components"
+import type { ConfirmSheetProps } from "@/types"
 
 /**
  * ConfirmSheet — renders a bottom Sheet on mobile and a centred Dialog on

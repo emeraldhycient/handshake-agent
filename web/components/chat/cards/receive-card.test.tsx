@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, it, expect, vi } from "vitest"
 import { ReceiveCard } from "./receive-card"
-import type { ReceiveCardProps } from "@/types/components"
+import type { ReceiveCardProps } from "@/types"
 
 // Capture the `value` prop passed to QRCodeSVG so we can assert it matches the address.
 vi.mock("qrcode.react", () => ({
