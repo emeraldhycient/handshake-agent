@@ -17,7 +17,7 @@ import {
 import { qk } from "@/lib/query/keys"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { cn } from "@/lib/utils"
-import type { PageWithQuickActionProps } from "@/types/components"
+import type { PageWithQuickActionProps } from "@/types"
 
 /**
  * Desktop overview page — orchestrator. Owns the three data hooks and the four

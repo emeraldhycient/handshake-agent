@@ -26,7 +26,7 @@ import { PinPad } from "@/components/chat/overlays/pin-pad"
 import { SuccessOverlay } from "@/components/chat/overlays/success-overlay"
 import { FocusTrap } from "@/components/shared/focus-trap"
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
-import type { MobileShellProps, MobileTabId } from "@/types/components"
+import type { MobileShellProps, MobileTabId } from "@/types"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
 
 export function MobileShell({ store: injectedStore }: MobileShellProps) {

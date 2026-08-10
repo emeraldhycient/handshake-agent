@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { ReceiptCard } from "./receipt-card"
-import type { ReceiptCardProps } from "@/types/components"
+import type { ReceiptCardProps } from "@/types"
 
 // The raw-send "Save this recipient" dialog embeds the standard AddCryptoForm
 // (add mode), which consumes useAddCryptoAddress — module-mock it the same

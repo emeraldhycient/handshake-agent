@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
-import type { TicketsCardProps } from "@/types/components"
+import type { TicketsCardProps } from "@/types"
 import type { TicketOption } from "@/lib/schemas"
 
 /**

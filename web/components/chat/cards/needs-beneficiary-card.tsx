@@ -13,7 +13,7 @@ import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
 import { SavedBeneficiaryList } from "@/components/chat/cards/needs-beneficiary/saved-beneficiary-list"
 import { AddBankForm } from "@/components/chat/cards/needs-beneficiary/add-bank-form"
 import { AddCryptoForm } from "@/components/chat/cards/needs-beneficiary/add-crypto-form"
-import type { NeedsBeneficiaryCardProps } from "@/types/components"
+import type { NeedsBeneficiaryCardProps } from "@/types"
 
 export function NeedsBeneficiaryCard({
   beneficiaryType,

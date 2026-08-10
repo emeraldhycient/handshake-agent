@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react"
 import { useTranslation } from "./translation-provider"
 import { cn } from "@/lib/utils"
-import type { LanguageSelectorProps } from "@/types/components"
+import type { LanguageSelectorProps } from "@/types"
 
 const LISTBOX_ID = "language-selector-listbox"
 

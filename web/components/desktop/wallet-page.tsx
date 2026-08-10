@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useWalletAssets, useDepositAddress } from "@/lib/query/hooks"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { cn } from "@/lib/utils"
-import type { PageWithQuickActionProps } from "@/types/components"
+import type { PageWithQuickActionProps } from "@/types"
 
 /**
  * Desktop wallet page — orchestrator. Owns the data hooks and the four async

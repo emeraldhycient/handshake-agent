@@ -10,7 +10,7 @@ import { NeedsBeneficiaryCard } from "@/components/chat/cards/needs-beneficiary-
 import { ChooseBeneficiaryCard } from "@/components/chat/cards/choose-beneficiary-card"
 import { TransactionsCard } from "@/components/chat/cards/transactions-card"
 import { SwapCard } from "@/components/chat/cards/swap-card"
-import type { ChatMessageViewProps } from "@/types/components"
+import type { ChatMessageViewProps } from "@/types"
 
 /**
  * ChatMessageView — kind-dispatch wrapper for all chat message variants.

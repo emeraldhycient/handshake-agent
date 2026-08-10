@@ -37,3 +37,25 @@ export interface AuthStepHeaderProps {
   /** Supporting line under the heading. */
   subcopy: string
 }
+
+// ─── Auth forms ──────────────────────────────────────────────────────────────
+
+/** Props for SignupForm — no required props; self-contained. */
+export interface SignupFormProps {
+  className?: string
+}
+
+/** Props for VerifyEmailForm — token comes from the URL query param. */
+export interface VerifyEmailFormProps {
+  token: string
+}
+
+/** Props for LoginForm — no required props; self-contained. */
+export interface LoginFormProps {
+  className?: string
+}
+
+/** Props for RequireVerified — wraps children that require verified KYC status. */
+export interface RequireVerifiedProps {
+  children: React.ReactNode
+}

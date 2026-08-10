@@ -20,7 +20,7 @@ import { FocusTrap } from "@/components/shared/focus-trap"
 import { BrandMark } from "@/components/shared"
 import { cn } from "@/lib/utils"
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
-import type { ChatRailProps } from "@/types/components"
+import type { ChatRailProps } from "@/types"
 import type { ChatMessage, TicketOption } from "@/lib/schemas"
 
 // ─── Component ────────────────────────────────────────────────────────────────

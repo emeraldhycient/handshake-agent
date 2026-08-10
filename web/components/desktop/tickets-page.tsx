@@ -4,7 +4,7 @@ import { ConfirmedTicketCard } from "@/components/desktop/tickets/confirmed-tick
 import { BrowseEvents } from "@/components/desktop/tickets/browse-events"
 import { useEvents } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
-import type { PageWithQuickActionProps } from "@/types/components"
+import type { PageWithQuickActionProps } from "@/types"
 
 /**
  * Desktop tickets page — orchestrator. Composes the confirmed-ticket showcase and

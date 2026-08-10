@@ -13,7 +13,7 @@ import {
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import { useActivityFeed } from "@/lib/query/hooks"
 import { qk } from "@/lib/query/keys"
-import type { ActivityTabProps } from "@/types/components"
+import type { ActivityTabProps } from "@/types"
 
 export function ActivityTab({ className }: ActivityTabProps) {
   const {

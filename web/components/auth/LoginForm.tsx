@@ -13,7 +13,7 @@
 import { useState } from "react"
 import { LoginRequestStep } from "./login/login-request-step"
 import { LoginVerifyStep } from "./login/login-verify-step"
-import type { LoginFormProps } from "@/types/components"
+import type { LoginFormProps } from "@/types"
 
 export function LoginForm({ className }: LoginFormProps) {
   const [step, setStep] = useState<"request" | "verify">("request")

@@ -7,7 +7,7 @@ import { buildGreeting } from "@/lib/greeting"
 import { InstallButton } from "@/components/pwa/install-button"
 import { TopbarSearch } from "@/components/desktop/topbar/topbar-search"
 import { TopbarNotifications } from "@/components/desktop/topbar/topbar-notifications"
-import type { DashboardTopbarProps } from "@/types/components"
+import type { DashboardTopbarProps } from "@/types"
 
 /**
  * Desktop dashboard topbar — orchestrator. Renders the greeting and composes the

@@ -5,7 +5,7 @@ import { AvatarPlaceholder, BrandMark } from "@/components/shared"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { useMe, useProfile } from "@/lib/query/auth"
 import { useAuthStore } from "@/lib/store/auth-store"
-import type { DashboardSidebarProps } from "@/types/components"
+import type { DashboardSidebarProps } from "@/types"
 import type { DashboardPage } from "@/lib/schemas"
 
 // ─── Nav items definition ─────────────────────────────────────────────────────

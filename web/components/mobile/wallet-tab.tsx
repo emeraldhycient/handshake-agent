@@ -7,7 +7,7 @@ import { AssetIcon } from "@/components/shared/asset-icon"
 import { useBalances, useWalletAssets } from "@/lib/query/hooks"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { chipLabel } from "@/lib/chat/flow"
-import type { WalletTabProps } from "@/types/components"
+import type { WalletTabProps } from "@/types"
 import type { ChatAction } from "@/lib/schemas"
 
 const QUICK_ACTIONS: { action: ChatAction; glyph: string; label: string }[] = [

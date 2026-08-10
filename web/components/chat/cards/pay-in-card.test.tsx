@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { TransactionStatusResponse } from "@handshake-agent/contracts"
-import type { PayInCardProps } from "@/types/components"
+import type { PayInCardProps } from "@/types"
 
 // C4: PayInCardLive is the SINGLE settlement watcher. We mock the polling hook
 // and the store action so we can assert the wiring without a live query client.

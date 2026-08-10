@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, it, expect, vi } from "vitest"
 import { TicketsCard } from "./tickets-card"
-import type { TicketsCardProps } from "@/types/components"
+import type { TicketsCardProps } from "@/types"
 import type { TicketOption } from "@/lib/schemas"
 
 const options: TicketOption[] = [

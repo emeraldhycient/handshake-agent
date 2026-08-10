@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { ActionButtonProps } from "@/types/components"
+import type { ActionButtonProps } from "@/types"
 
 /**
  * ActionButton — the single canonical Buy/Send/Receive/Swap quick-action button

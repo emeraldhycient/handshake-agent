@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react"
 import { cn } from "@/lib/utils"
-import type { FocusTrapProps } from "@/types/components"
+import type { FocusTrapProps } from "@/types"
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input,textarea,select,[tabindex]:not([tabindex="-1"])'

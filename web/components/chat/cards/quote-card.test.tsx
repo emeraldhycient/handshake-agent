@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, it, expect, vi } from "vitest"
 import { QuoteCard } from "./quote-card"
-import type { QuoteCardProps } from "@/types/components"
+import type { QuoteCardProps } from "@/types"
 
 const baseProps: QuoteCardProps = {
   kind: "quote",

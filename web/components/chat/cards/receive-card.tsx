@@ -5,7 +5,7 @@ import { QRCodeSVG } from "qrcode.react"
 import { cn } from "@/lib/utils"
 import { DepositNetworkWarning } from "@/components/shared/deposit-network-warning"
 import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
-import type { ReceiveCardProps } from "@/types/components"
+import type { ReceiveCardProps } from "@/types"
 
 /**
  * ReceiveCard — chat message card for a deposit address.

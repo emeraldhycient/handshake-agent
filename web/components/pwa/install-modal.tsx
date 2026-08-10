@@ -11,7 +11,7 @@ import {
 import { QrCode } from "@/components/shared/qr-code"
 import { useInstallPrompt } from "@/hooks/use-install-prompt"
 import { absoluteUrl, SITE_NAME } from "@/lib/site"
-import type { InstallModalProps } from "@/types/components"
+import type { InstallModalProps } from "@/types"
 import { InstallInstructions } from "./install-instructions"
 
 /**

@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { AvatarPlaceholderProps } from "@/types/components"
+import type { AvatarPlaceholderProps } from "@/types"
 
 /**
  * Circular striped avatar placeholder.

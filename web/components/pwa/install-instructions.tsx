@@ -3,7 +3,7 @@
 import { Download, Share, SquarePlus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import type { InstallInstructionsProps } from "@/types/components"
+import type { InstallInstructionsProps } from "@/types"
 
 /** iOS "Add to Home Screen" steps, keyed for stable list rendering. */
 const IOS_STEPS = [

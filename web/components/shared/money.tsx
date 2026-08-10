@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { MoneyProps } from "@/types/components"
+import type { MoneyProps } from "@/types"
 
 /**
  * Renders a monetary value with tabular-nums for digit alignment.

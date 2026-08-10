@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { DetailRowsProps } from "@/types/components"
+import type { DetailRowsProps } from "@/types"
 
 /**
  * Renders a vertical list of label/value detail rows.

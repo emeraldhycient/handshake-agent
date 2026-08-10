@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { chipLabel } from "@/lib/chat/flow"
 import { cn } from "@/lib/utils"
-import type { ChatComposerProps } from "@/types/components"
+import type { ChatComposerProps } from "@/types"
 
 export function ChatComposer({
   chips,

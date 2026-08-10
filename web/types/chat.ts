@@ -3,12 +3,9 @@ import type { UseFormRegisterReturn } from "react-hook-form"
 import type { Beneficiary } from "@handshake-agent/contracts/beneficiaries"
 import type { SendDestinationInput } from "@handshake-agent/contracts"
 import type { ChooseBeneficiaryView } from "@/lib/schemas"
-import type {
-  Density,
-  ConfirmSheetProps,
-  PinPadProps,
-  NeedsBeneficiaryCardProps,
-} from "./components"
+import type { NeedsBeneficiaryCardProps } from "./chat-cards"
+import type { ConfirmSheetProps, PinPadProps } from "./chat-overlays"
+import type { Density } from "./shared"
 
 /**
  * Bug 2 — terminal (non-actionable) state for a rehydrated quote/swap card whose

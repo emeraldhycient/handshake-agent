@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { LoadMoreButtonProps } from "@/types/components"
+import type { LoadMoreButtonProps } from "@/types"
 
 /** Shared classes for every paginator button; per-site shape comes via className. */
 const BASE =

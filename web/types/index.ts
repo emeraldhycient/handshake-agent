@@ -1,6 +1,6 @@
-// Barrel for web types. Import from "@/types". Per-feature files are split out of
-// the historical components.ts as features are refactored (root §16).
-export * from "./components"
+// Barrel for web types. Import from "@/types". Per-feature files mirror the
+// `components/<feature>/` directories (root §16.6).
+export * from "./shared"
 export * from "./data-table"
 export * from "./overview"
 export * from "./wallet"
@@ -12,5 +12,12 @@ export * from "./forms"
 export * from "./kyc"
 export * from "./transaction"
 export * from "./chat"
+export * from "./chat-cards"
+export * from "./chat-thread"
+export * from "./chat-overlays"
+export * from "./desktop"
+export * from "./mobile"
+export * from "./pwa"
+export * from "./i18n"
 export * from "./settings"
 export * from "./onboarding"

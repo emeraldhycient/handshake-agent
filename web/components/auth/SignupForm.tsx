@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button"
 import { SignupSuccess } from "@/components/auth/signup/signup-success"
 import { useSignup } from "@/lib/query/auth"
 import { toErrorMessage } from "@/lib/error-message"
-import type { SignupFormProps } from "@/types/components"
+import type { SignupFormProps } from "@/types"
 
 export function SignupForm({ className }: SignupFormProps) {
   const {
